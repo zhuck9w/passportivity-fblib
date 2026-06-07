@@ -11,7 +11,7 @@ while (true) {
   const current = scrapeJobManager.get(job.run_id);
   if (!current) break;
   console.log(
-    `${current.status}: found=${current.ads_found} saved=${current.ads_saved} duplicates=${current.duplicates_found}`
+    `${current.status}: found=${current.ads_found} saved=${current.ads_saved}`
   );
   if (current.status === 'succeeded' || current.status === 'failed') {
     if (current.errors.length) console.error(current.errors.join('\n'));

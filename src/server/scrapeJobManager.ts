@@ -97,7 +97,6 @@ export class ScrapeJobManager {
 
     let adsFound = 0;
     let adsSaved = 0;
-    let duplicatesFound = 0;
     let limitReached = false;
     const errors: string[] = [];
 
@@ -120,14 +119,13 @@ export class ScrapeJobManager {
             try {
               const saved = await upsertScrapedAd(ad);
               adsSaved += 1;
-              if (saved.isDuplicate) duplicatesFound += 1;
               logScraper('info', 'Ad saved', {
                 run_id: runId,
                 competitor: competitor.name,
                 library_id: ad.facebook_library_id,
-                duplicate: saved.isDuplicate
+                existing: saved.isExisting
               });
-              this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: duplicatesFound });
+              this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: 0 });
               if (adsSaved >= limit) {
                 limitReached = true;
                 logScraper('info', 'Scrape limit reached', {
@@ -182,7 +180,7 @@ export class ScrapeJobManager {
       finished_at: finishedAt,
       ads_found: adsFound,
       ads_saved: adsSaved,
-      duplicates_found: duplicatesFound,
+      duplicates_found: 0,
       error_summary: errorSummary
     }).catch(() => undefined);
 
@@ -201,7 +199,7 @@ export class ScrapeJobManager {
       ads_saved: adsSaved,
       limit,
       limit_reached: limitReached,
-      duplicates_found: duplicatesFound,
+      duplicates_found: 0,
       errors
     });
     logScraper(status === 'succeeded' ? 'info' : status === 'stopped' ? 'warn' : 'error', 'Scrape run finished', {
@@ -209,7 +207,7 @@ export class ScrapeJobManager {
       status,
       ads_found: adsFound,
       ads_saved: adsSaved,
-      duplicates_found: duplicatesFound,
+      duplicates_found: 0,
       errors: errors.length
     });
     this.controllers.delete(runId);

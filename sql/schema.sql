@@ -45,7 +45,7 @@ create table if not exists public.ads (
   last_seen_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (competitor_id, dedupe_key)
+  unique (competitor_id, facebook_library_id)
 );
 
 create table if not exists public.ad_variations (
@@ -86,6 +86,11 @@ create index if not exists ads_last_seen_idx on public.ads(last_seen_at desc);
 create index if not exists ads_platforms_idx on public.ads using gin(platforms);
 create index if not exists ad_variations_ad_idx on public.ad_variations(ad_id);
 create index if not exists ad_locations_ad_idx on public.ad_locations(ad_id);
+
+alter table public.ads drop constraint if exists ads_competitor_id_dedupe_key_key;
+alter table public.ads drop constraint if exists ads_competitor_facebook_library_id_key;
+alter table public.ads add constraint ads_competitor_facebook_library_id_key
+  unique (competitor_id, facebook_library_id);
 
 alter table public.scrape_runs drop constraint if exists scrape_runs_status_check;
 alter table public.scrape_runs add constraint scrape_runs_status_check

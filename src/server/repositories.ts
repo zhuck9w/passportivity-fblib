@@ -8,36 +8,14 @@ function throwIfError<T>(result: { data: T | null; error: { message: string } | 
   return result.data as T;
 }
 
-function uniqueTexts(values: Array<string | null | undefined>) {
-  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
-}
-
 async function findExistingAd(input: ScrapedAdInput) {
-  const byDedupe = await supabase
-    .from('ads')
-    .select('*')
-    .eq('competitor_id', input.competitor_id)
-    .eq('dedupe_key', input.dedupe_key)
-    .maybeSingle();
-  const dedupeMatch = throwIfError<Ad | null>(byDedupe);
-  if (dedupeMatch) return dedupeMatch;
-
   const byPrimaryLibraryId = await supabase
     .from('ads')
     .select('*')
     .eq('competitor_id', input.competitor_id)
     .eq('facebook_library_id', input.facebook_library_id)
     .maybeSingle();
-  const primaryIdMatch = throwIfError<Ad | null>(byPrimaryLibraryId);
-  if (primaryIdMatch) return primaryIdMatch;
-
-  const byKnownLibraryIds = await supabase
-    .from('ads')
-    .select('*')
-    .eq('competitor_id', input.competitor_id)
-    .contains('facebook_library_ids', [input.facebook_library_id])
-    .maybeSingle();
-  return throwIfError<Ad | null>(byKnownLibraryIds);
+  return throwIfError<Ad | null>(byPrimaryLibraryId);
 }
 
 export async function listCompetitors() {
@@ -172,16 +150,16 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
   const existing = await findExistingAd(input);
 
   const now = new Date().toISOString();
-  const libraryIds = uniqueTexts([...(existing?.facebook_library_ids ?? []), input.facebook_library_id]);
-  const duplicateCount = libraryIds.length;
 
   let ad: Ad;
   if (existing) {
     const result = await supabase
       .from('ads')
       .update({
-        facebook_library_ids: libraryIds,
-        duplicate_count: duplicateCount,
+        facebook_library_id: input.facebook_library_id,
+        facebook_library_ids: [input.facebook_library_id],
+        duplicate_count: 1,
+        dedupe_key: input.facebook_library_id,
         status: input.status,
         start_date_text: input.start_date_text ?? existing.start_date_text,
         end_date_text: input.end_date_text ?? existing.end_date_text,
@@ -216,7 +194,7 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         cta: input.cta ?? null,
         preview_html: input.preview_html ?? null,
         preview_text: input.preview_text ?? null,
-        dedupe_key: input.dedupe_key,
+        dedupe_key: input.facebook_library_id,
         duplicate_count: 1
       })
       .select('*')
@@ -240,7 +218,7 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         cta: input.cta ?? null,
         preview_html: input.preview_html ?? null,
         preview_text: input.preview_text ?? null,
-        dedupe_key: input.dedupe_key,
+        dedupe_key: input.facebook_library_id,
         source_url: input.source_url,
         seen_at: now,
         updated_at: now
@@ -271,5 +249,5 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
     throwIfError<null>(insertLocations as { data: null; error: { message: string } | null });
   }
 
-  return { ad, isDuplicate: Boolean(existing) };
+  return { ad, isExisting: Boolean(existing) };
 }

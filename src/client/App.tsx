@@ -470,7 +470,7 @@ export function App() {
       competitors: competitors.length,
       enabled: competitors.filter((competitor) => competitor.enabled).length,
       ads: ads.length,
-      duplicates: ads.reduce((sum, ad) => sum + Math.max(0, ad.duplicate_count - 1), 0)
+      active: ads.filter((ad) => ad.status === 'active').length
     }),
     [ads, competitors]
   );
@@ -510,7 +510,7 @@ export function App() {
         <Metric icon={<Database size={18} />} label="Объявлений" value={counters.ads} />
         <Metric icon={<CheckCircle2 size={18} />} label="Включено конкурентов" value={counters.enabled} />
         <Metric icon={<CirclePause size={18} />} label="Всего конкурентов" value={counters.competitors} />
-        <Metric icon={<Filter size={18} />} label="Дублей склеено" value={counters.duplicates} />
+        <Metric icon={<Filter size={18} />} label="Активных в таблице" value={counters.active} />
       </section>
 
       {job && <JobPanel job={job} onStop={() => void handleStopScrape()} />}
@@ -669,7 +669,7 @@ function JobPanel({ job, onStop }: { job: ScrapeJobSnapshot; onStop: () => void 
       <div>
         <strong>{job.message}</strong>
         <span>
-          найдено {job.ads_found}, сохранено {job.ads_saved}, дублей {job.duplicates_found}
+          найдено {job.ads_found}, сохранено {job.ads_saved}
           {job.limit ? `, лимит ${job.limit}` : ''}
         </span>
       </div>

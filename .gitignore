@@ -4,6 +4,7 @@ coverage/
 .vite/
 playwright-report/
 test-results/
+.playwright-profile/
 .env
 .env.local
 .env.*.local

@@ -12,7 +12,7 @@
 - Запуск сбора по всем включенным конкурентам или по одному конкуренту.
 - Остановка running-сбора с сохранением уже успешно собранных объявлений.
 - Сохранение объявлений, вариаций, гео-видимости и HTML-превью.
-- Дедупликация по нормализованным `title + body_text + cta`.
+- Каждое объявление сохраняется отдельной строкой по `facebook_library_id`; текстовые дубли не склеиваются.
 
 ## Supabase
 
@@ -27,6 +27,8 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 SUPABASE_SECRET_KEY=your-secret-or-service-role-key
 SCRAPER_HEADLESS=false
+SCRAPER_BROWSER_CHANNEL=chrome
+SCRAPER_USER_DATA_DIR=.playwright-profile
 SCRAPER_SLOW_MO_MS=250
 SCRAPER_LIMIT=25
 ```
@@ -41,6 +43,10 @@ SCRAPER_SLOW_MO_MS=0
 ```
 
 После изменения `.env` перезапустите backend.
+
+`SCRAPER_BROWSER_CHANNEL=chrome` запускает обычный установленный Google Chrome вместо bundled Chromium Playwright. Это полезно для Facebook Ad Library, потому что выдача может отличаться для разных браузеров/профилей.
+
+`SCRAPER_USER_DATA_DIR=.playwright-profile` включает постоянный профиль браузера. В этой папке сохраняются cookies и вход в Facebook. Папка добавлена в `.gitignore`.
 
 `SCRAPER_LIMIT=25` задает системный лимит успешно сохраненных объявлений на один запуск. Когда лимит достигнут, сбор закрывает браузер и завершается со статусом `succeeded`.
 
@@ -126,6 +132,28 @@ http://localhost:4000/api/health
 curl.exe -X POST http://localhost:4000/api/jobs/<run_id>/stop
 ```
 
+## Facebook login profile
+
+Facebook Ad Library может показывать меньше активных объявлений анонимному Playwright Chromium, чем обычному Chrome с вашим входом. Для полной выдачи используйте persistent profile.
+
+В `.env` должны быть:
+
+```env
+SCRAPER_HEADLESS=false
+SCRAPER_BROWSER_CHANNEL=chrome
+SCRAPER_USER_DATA_DIR=.playwright-profile
+```
+
+Один раз откройте браузер для логина:
+
+```powershell
+npm.cmd run login:facebook
+```
+
+В открывшемся Chrome войдите в Facebook/Meta и убедитесь, что Ad Library показывает полную выдачу. После этого вернитесь в терминал и нажмите Enter. Cookies сохранятся в `.playwright-profile`, и следующие запуски скрейпера будут использовать этот же профиль.
+
+Важно: не запускайте одновременно `login:facebook` и сбор. Один persistent profile должен использоваться одним процессом браузера.
+
 ## Логи
 
 При запуске через фоновые команды в корне проекта остаются:
@@ -193,7 +221,7 @@ npm run build
 
 ## Ограничения MVP
 
-- Нет Facebook-логина, капч и обхода ограничений.
+- Facebook-логин поддерживается через локальный persistent profile Playwright. Капчи и обход ограничений не реализуются.
 - Медиа не скачиваются отдельно; сохраняется HTML финального превью.
 - Селекторы Meta нужно будет уточнить на живой странице, если текущие широкие кандидаты цепляют лишние контейнеры.
 - Перед переносом на Vercel нужно заменить MVP RLS policies на приватную auth-модель.

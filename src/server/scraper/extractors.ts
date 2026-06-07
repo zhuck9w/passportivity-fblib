@@ -1,6 +1,5 @@
 import type { Locator, Page } from 'playwright';
 import { buildAdArchiveIdUrl } from '../../shared/adLibraryUrl';
-import { createDedupeKey } from '../../shared/dedupe';
 import type { ScrapedAdInput, ScrapedLocationInput } from '../../shared/types';
 import type { SelectorConfig } from './selectors';
 
@@ -303,7 +302,7 @@ export async function extractDetailAd(
     cta,
     preview_html: preview.html,
     preview_text: preview.text,
-    dedupe_key: createDedupeKey([title, bodyText, cta], facebookLibraryId),
+    dedupe_key: facebookLibraryId,
     locations: await extractLocations(page, config)
   };
 }

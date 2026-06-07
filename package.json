@@ -9,6 +9,8 @@
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "login:facebook": "tsx src/server/scripts/loginFacebookProfile.ts",
+    "restore:split-ads": "tsx src/server/scripts/restoreSplitAds.ts",
     "scrape": "tsx src/server/scripts/runScrape.ts"
   },
   "dependencies": {

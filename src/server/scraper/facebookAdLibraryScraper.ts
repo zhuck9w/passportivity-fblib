@@ -1,4 +1,5 @@
-import { chromium, type Locator, type Page } from 'playwright';
+import path from 'node:path';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 import { buildAdLibraryUrl } from '../../shared/adLibraryUrl';
 import type { Competitor, ScrapedAdInput } from '../../shared/types';
 import { env } from '../env';
@@ -23,6 +24,10 @@ function throwIfStopped(signal?: AbortSignal) {
   }
 }
 
+function resolveUserDataDir(userDataDir: string) {
+  return path.isAbsolute(userDataDir) ? userDataDir : path.resolve(process.cwd(), userDataDir);
+}
+
 export class FacebookAdLibraryScraper {
   private readonly configPromise = loadSelectorConfig();
 
@@ -30,16 +35,35 @@ export class FacebookAdLibraryScraper {
     const config = await this.configPromise;
     const limit = options.limit ?? env.scraperMaxAds;
     const sourceUrl = buildAdLibraryUrl(competitor.facebook_page_id);
-    const browser = await chromium.launch({
+    let browser: Browser | null = null;
+    let context: BrowserContext;
+    const launchOptions = {
       headless: env.scraperHeadless,
-      slowMo: env.scraperSlowMoMs
-    });
-    const context = await browser.newContext({
-      locale: 'ru-RU',
-      viewport: { width: 1440, height: 1000 }
-    });
+      slowMo: env.scraperSlowMoMs,
+      channel: env.scraperBrowserChannel
+    };
+
+    if (env.scraperUserDataDir) {
+      const userDataDir = resolveUserDataDir(env.scraperUserDataDir);
+      logScraper('info', 'Using persistent browser profile', {
+        user_data_dir: userDataDir,
+        channel: env.scraperBrowserChannel ?? 'playwright-chromium'
+      });
+      context = await chromium.launchPersistentContext(userDataDir, {
+        ...launchOptions,
+        locale: 'ru-RU',
+        viewport: { width: 1440, height: 1000 }
+      });
+    } else {
+      browser = await chromium.launch(launchOptions);
+      context = await browser.newContext({
+        locale: 'ru-RU',
+        viewport: { width: 1440, height: 1000 }
+      });
+    }
     const stopHandler = () => {
-      void browser.close().catch(() => undefined);
+      void context.close().catch(() => undefined);
+      void browser?.close().catch(() => undefined);
     };
     options.signal?.addEventListener('abort', stopHandler, { once: true });
     const page = await context.newPage();
@@ -95,7 +119,7 @@ export class FacebookAdLibraryScraper {
     } finally {
       options.signal?.removeEventListener('abort', stopHandler);
       await context.close().catch(() => undefined);
-      await browser.close().catch(() => undefined);
+      await browser?.close().catch(() => undefined);
     }
 
     return { ads, errors };

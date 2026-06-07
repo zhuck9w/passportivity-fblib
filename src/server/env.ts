@@ -17,6 +17,11 @@ function readNumber(name: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readOptional(name: string) {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
 const defaultScraperLimit = readNumber('SCRAPER_MAX_ADS', 25);
 
 const serverKey =
@@ -37,6 +42,8 @@ export const env = {
   supabaseServerKey: serverKey,
   usingPublishableKeyForServer: serverKey === process.env.SUPABASE_PUBLISHABLE_KEY?.trim(),
   scraperHeadless: (process.env.SCRAPER_HEADLESS ?? 'false').toLowerCase() === 'true',
+  scraperBrowserChannel: readOptional('SCRAPER_BROWSER_CHANNEL'),
+  scraperUserDataDir: readOptional('SCRAPER_USER_DATA_DIR'),
   scraperSlowMoMs: readNumber('SCRAPER_SLOW_MO_MS', 0),
   scraperLimit: readNumber('SCRAPER_LIMIT', defaultScraperLimit),
   scraperMaxAds: defaultScraperLimit,
