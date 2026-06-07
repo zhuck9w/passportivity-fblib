@@ -1,0 +1,64 @@
+{
+  "results": {
+    "ready": ["text=Результаты", "text=Results"],
+    "adCard": "div:has-text(\"ID Библиотеки:\")",
+    "infoButton": "text=Информация об объявлении",
+    "errorMarkers": [
+      "text=Что-то пошло не так",
+      "text=Something went wrong",
+      "text=This page isn't available",
+      "text=Страница недоступна",
+      "text=Произошла ошибка :("
+    ],
+    "libraryIdRegex": "ID Библиотеки:\\s*([0-9]+)",
+    "dateStartedRegex": "Показ начат\\s+([^\\n]+)",
+    "dateRangeRegex": "С\\s+([^\\n]+?)\\s+по\\s+([^\\n]+)",
+    "activeText": "Активно",
+    "inactiveText": "Неактивно",
+    "multipleVersionsText": "несколько версий",
+    "platformTexts": ["Facebook", "Instagram", "Messenger", "Audience Network"]
+  },
+  "group": {
+    "ready": ["text=Сводные данные", "text=версий объявления", "text=ad versions"],
+    "variationCard": "div:has-text(\"ID Библиотеки:\")",
+    "selectedLibraryIdChip": "text=ID Библиотеки:",
+    "returnToGroupButtons": [
+      "[aria-label=\"Закрыть\"]",
+      "[aria-label=\"Close\"]",
+      "text=Назад",
+      "text=Back"
+    ]
+  },
+  "detail": {
+    "ready": [
+      "[data-testid=\"ad-library-dynamic-content-container\"]",
+      ".ad-library-dynamic-content-container",
+      "text=Видимость местоположения"
+    ],
+    "previewContainer": "[data-testid=\"ad-library-dynamic-content-container\"], .ad-library-dynamic-content-container",
+    "locationToggle": "text=Видимость местоположения",
+    "locationRows": "table tbody tr, [role=\"row\"]",
+    "locationCells": "td, [role=\"cell\"]",
+    "closeButtons": [
+      "[aria-label=\"Закрыть\"]",
+      "[aria-label=\"Close\"]",
+      "text=Назад",
+      "text=Back"
+    ]
+  },
+  "creative": {
+    "adLabelTexts": ["Реклама", "Sponsored"],
+    "ctaCandidates": [
+      "Подробнее",
+      "Learn more",
+      "Связаться",
+      "Contact us",
+      "Отправить сообщение",
+      "Send message",
+      "Зарегистрироваться",
+      "Sign up",
+      "Смотреть еще",
+      "See more"
+    ]
+  }
+}
