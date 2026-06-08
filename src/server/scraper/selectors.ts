@@ -7,6 +7,8 @@ export type SelectorConfig = {
     ready: string[];
     adCard: string;
     infoButton: string;
+    summaryButtons: string[];
+    summaryButtonLabels: string[];
     errorMarkers: string[];
     libraryIdRegex: string;
     dateStartedRegex: string;

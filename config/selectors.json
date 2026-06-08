@@ -3,6 +3,8 @@
     "ready": ["text=Результаты", "text=Results"],
     "adCard": "div:has-text(\"ID Библиотеки:\")",
     "infoButton": "text=Информация об объявлении",
+    "summaryButtons": ["text=Смотреть сводные данные", "text=See summary details", "text=View summary details"],
+    "summaryButtonLabels": ["Смотреть сводные данные", "See summary details", "View summary details"],
     "errorMarkers": [
       "text=Что-то пошло не так",
       "text=Something went wrong",
@@ -31,9 +33,9 @@
   },
   "detail": {
     "ready": [
-      "[data-testid=\"ad-library-dynamic-content-container\"]",
-      ".ad-library-dynamic-content-container",
-      "text=Видимость местоположения"
+      "text=Видимость местоположения",
+      "text=Рекламная аудитория ЕС",
+      "text=Location visibility"
     ],
     "previewContainer": "[data-testid=\"ad-library-dynamic-content-container\"], .ad-library-dynamic-content-container",
     "locationToggle": "text=Видимость местоположения",

@@ -54,6 +54,42 @@ function cleanLine(line: string) {
   return line.replace(/\u200b/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeForMatch(text: string | null | undefined) {
+  return cleanLine(text ?? '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function meaningfulSnippet(line: string) {
+  const normalized = normalizeForMatch(line);
+  if (normalized.length <= 90) return normalized;
+  return normalized.slice(0, 90).trim();
+}
+
+function fallbackMatchScore(text: string | null | undefined, fallback: CardSnapshot) {
+  const normalizedText = normalizeForMatch(text);
+  if (!normalizedText) return 0;
+
+  let score = 0;
+  const candidates = [
+    fallback.title,
+    ...(fallback.body_text ?? '')
+      .split('\n')
+      .map(cleanLine)
+      .filter((line) => line.length >= 25)
+      .slice(0, 4)
+  ]
+    .map((line) => meaningfulSnippet(line ?? ''))
+    .filter((line) => line.length >= 20);
+
+  for (const candidate of candidates) {
+    if (normalizedText.includes(candidate)) score += candidate.length > 50 ? 4 : 2;
+  }
+
+  return score;
+}
+
 function isPageChromeLine(line: string, config: SelectorConfig) {
   if (!line) return true;
   if (pageChromePatterns.some((pattern) => pattern.test(line))) return true;
@@ -129,6 +165,8 @@ function extractCreativeParts(text: string, config: SelectorConfig) {
 function preferCleanCreative(primaryText: string | null, fallback: CardSnapshot, config: SelectorConfig) {
   const primaryLines = primaryText ? compactLines(primaryText, config) : [];
   const fallbackLines = compactLines(fallback.raw_text, config);
+  const hasFallbackCreative = Boolean(fallback.title || fallback.body_text);
+  const primaryMatchesFallback = !hasFallbackCreative || fallbackMatchScore(primaryText, fallback) > 0;
 
   const primaryLooksLikePage = Boolean(
     primaryText &&
@@ -138,7 +176,10 @@ function preferCleanCreative(primaryText: string | null, fallback: CardSnapshot,
   );
 
   const sourceText =
-    primaryLines.length > 0 && !primaryLooksLikePage && primaryLines.length <= Math.max(fallbackLines.length + 8, 18)
+    primaryLines.length > 0 &&
+    primaryMatchesFallback &&
+    !primaryLooksLikePage &&
+    primaryLines.length <= Math.max(fallbackLines.length + 8, 18)
       ? primaryLines.join('\n')
       : fallbackLines.join('\n');
 
@@ -207,14 +248,14 @@ async function extractLocations(page: Page, config: SelectorConfig): Promise<Scr
   return locations;
 }
 
-async function resolvePreview(page: Page, config: SelectorConfig, fallback: CardSnapshot) {
-  await page
+async function resolvePreview(root: Page | Locator, config: SelectorConfig, fallback: CardSnapshot) {
+  await root
     .locator(config.detail.previewContainer)
     .first()
     .waitFor({ state: 'visible', timeout: 5000 })
     .catch(() => undefined);
 
-  const containers = page.locator(config.detail.previewContainer);
+  const containers = root.locator(config.detail.previewContainer);
   const count = await containers.count().catch(() => 0);
   let best: { html: string | null; text: string | null; score: number } = { html: null, text: null, score: -1 };
 
@@ -261,14 +302,32 @@ async function resolvePreview(page: Page, config: SelectorConfig, fallback: Card
     const html = await container
       .evaluate((node) => (node instanceof HTMLElement ? node.outerHTML : null))
       .catch(() => null);
+    const metrics = await container
+      .evaluate((node) => {
+        if (!(node instanceof HTMLElement)) return { inViewport: false, hasVideo: false };
+        const rect = node.getBoundingClientRect();
+        return {
+          inViewport: rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth,
+          hasVideo: Boolean(node.querySelector('video, [aria-label*="video" i], [aria-label*="видео" i]'))
+        };
+      })
+      .catch(() => ({ inViewport: false, hasVideo: false }));
     const creativeText = formattedText || text;
+    const matchScore = fallbackMatchScore(creativeText, fallback);
     let score = 0;
-    if (fallback.body_text && text.includes(fallback.body_text.slice(0, 40))) score += 4;
-    if (fallback.title && text.includes(fallback.title)) score += 2;
+    score += matchScore;
+    if ((fallback.title || fallback.body_text) && matchScore === 0) score -= 8;
+    if (metrics.inViewport) score += 2;
+    else score -= 2;
+    if (metrics.hasVideo && /\d+:\d+/.test(fallback.raw_text)) score += 3;
     if (text.includes('Библиотека рекламы') || text.includes('Результаты:')) score -= 6;
     if (creativeText.trim().length > 20) score += 1;
 
     if (score > best.score) best = { html, text: creativeText, score };
+  }
+
+  if ((fallback.title || fallback.body_text) && best.score < 1) {
+    return { html: null, text: null, score: best.score };
   }
 
   return best;
@@ -304,5 +363,38 @@ export async function extractDetailAd(
     preview_text: preview.text,
     dedupe_key: facebookLibraryId,
     locations: await extractLocations(page, config)
+  };
+}
+
+export async function extractCardFallbackAd(
+  card: Locator,
+  config: SelectorConfig,
+  competitorId: string,
+  sourceUrl: string,
+  fallback: CardSnapshot
+): Promise<ScrapedAdInput> {
+  const preview = await resolvePreview(card, config, fallback);
+  const fallbackHtml = await card.evaluate((node) => (node instanceof HTMLElement ? node.outerHTML : null)).catch(() => null);
+  const fallbackText = await card.innerText({ timeout: 3000 }).catch(() => fallback.raw_text);
+  const previewHtml = preview.html ?? fallbackHtml;
+  const previewText = preview.text ?? fallbackText;
+  const facebookLibraryId = fallback.facebook_library_id ?? 'unknown';
+  const creative = preferCleanCreative(previewText, fallback, config);
+
+  return {
+    competitor_id: competitorId,
+    facebook_library_id: facebookLibraryId,
+    source_url: facebookLibraryId === 'unknown' ? sourceUrl : buildAdArchiveIdUrl(facebookLibraryId),
+    status: fallback.status,
+    start_date_text: fallback.start_date_text,
+    end_date_text: fallback.end_date_text,
+    platforms: fallback.platforms,
+    title: creative.title ?? fallback.title,
+    body_text: creative.body_text ?? fallback.body_text,
+    cta: creative.cta ?? fallback.cta,
+    preview_html: previewHtml,
+    preview_text: previewText,
+    dedupe_key: facebookLibraryId,
+    locations: []
   };
 }

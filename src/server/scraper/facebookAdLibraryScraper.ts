@@ -4,7 +4,7 @@ import { buildAdLibraryUrl } from '../../shared/adLibraryUrl';
 import type { Competitor, ScrapedAdInput } from '../../shared/types';
 import { env } from '../env';
 import { logScraper } from '../logger';
-import { extractCardSnapshot, extractDetailAd, type CardSnapshot } from './extractors';
+import { extractCardFallbackAd, extractCardSnapshot, extractDetailAd, type CardSnapshot } from './extractors';
 import { clickFirstVisible, firstVisible, loadSelectorConfig, type SelectorConfig } from './selectors';
 
 export type ScrapeCompetitorResult = {
@@ -80,7 +80,7 @@ export class FacebookAdLibraryScraper {
       await this.openResults(page, sourceUrl, config);
       await this.scrollResults(page, config, limit);
 
-      const totalCards = await this.resultInfoButtons(page, config).count();
+      const totalCards = await this.resultActionButtons(page, config).count();
       const cardsToProcess = Math.min(totalCards, limit);
       logScraper('info', 'Result cards discovered', {
         competitor: competitor.name,
@@ -99,8 +99,8 @@ export class FacebookAdLibraryScraper {
           await this.openResults(page, sourceUrl, config);
           throwIfStopped(options.signal);
           await this.scrollToCard(page, config, index);
-          const infoButton = this.resultInfoButtons(page, config).nth(index);
-          const card = this.cardFromInfoButton(infoButton);
+          const actionButton = this.resultActionButtons(page, config).nth(index);
+          const card = this.cardFromActionButton(actionButton);
           const snapshot = await extractCardSnapshot(card, config);
           const extracted = await this.processResultCard(page, config, competitor.id, sourceUrl, snapshot, index, options);
           ads.push(...extracted);
@@ -138,7 +138,7 @@ export class FacebookAdLibraryScraper {
   private async waitForResultsOrError(page: Page, config: SelectorConfig, throwOnError = false) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < env.scraperNavigationTimeoutMs) {
-      if ((await this.resultInfoButtons(page, config).count().catch(() => 0)) > 0) return 'results';
+      if ((await this.resultActionButtons(page, config).count().catch(() => 0)) > 0) return 'results';
       if ((await page.locator(config.results.adCard).count().catch(() => 0)) > 0) return 'results';
       if (await firstVisible(page, config.results.errorMarkers, 250)) {
         if (throwOnError) throw new Error('Meta returned an error page after reload');
@@ -155,7 +155,7 @@ export class FacebookAdLibraryScraper {
     let stableRounds = 0;
 
     for (let round = 0; round < env.scraperMaxScrolls; round += 1) {
-      const count = await this.resultInfoButtons(page, config).count();
+      const count = await this.resultActionButtons(page, config).count();
       if (count >= limit) return;
       if (count === previousCount) stableRounds += 1;
       else stableRounds = 0;
@@ -169,9 +169,9 @@ export class FacebookAdLibraryScraper {
 
   private async scrollToCard(page: Page, config: SelectorConfig, index: number) {
     for (let round = 0; round <= env.scraperMaxScrolls; round += 1) {
-      const infoButton = this.resultInfoButtons(page, config).nth(index);
-      if ((await infoButton.count()) > 0) {
-        await infoButton.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
+      const actionButton = this.resultActionButtons(page, config).nth(index);
+      if ((await actionButton.count()) > 0) {
+        await actionButton.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
         return;
       }
       await page.mouse.wheel(0, 2200);
@@ -190,20 +190,27 @@ export class FacebookAdLibraryScraper {
     options: ScrapeCompetitorOptions
   ) {
     throwIfStopped(options.signal);
-    const infoButton = this.resultInfoButtons(page, config).nth(index);
-    await infoButton.click({ timeout: env.scraperActionTimeoutMs });
+    const actionButton = this.resultActionButtons(page, config).nth(index);
+    const actionText = await actionButton.innerText({ timeout: 1000 }).catch(() => '');
+    const isSummaryAction = this.isSummaryActionText(actionText, config);
+    await this.clickActionButton(actionButton);
     await page.waitForTimeout(1200);
 
-    if (await this.isDetailVisible(page, config)) {
+    if (isSummaryAction) {
+      logScraper('info', 'Opened summary group', { library_id: snapshot.facebook_library_id });
+      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options);
+    }
+
+    if (await this.isDetailVisible(page, config, snapshot)) {
       logScraper('info', 'Opened single ad detail', { library_id: snapshot.facebook_library_id });
       const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot);
       await options.onAd?.(ad);
       return [ad];
     }
 
-    if (snapshot.has_multiple_versions || (await firstVisible(page, config.group.ready, 1200))) {
+    if (await firstVisible(page, config.group.ready, 1200)) {
       logScraper('info', 'Opened grouped ad detail', { library_id: snapshot.facebook_library_id });
-      return this.processGroup(page, config, competitorId, sourceUrl, options);
+      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options);
     }
 
     throw new Error('Opened card, but neither detail preview nor group view appeared');
@@ -228,10 +235,10 @@ export class FacebookAdLibraryScraper {
       const variationCard = this.cardFromInfoButton(infoButton);
       const snapshot = await extractCardSnapshot(variationCard, config);
       await variationCard.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
-      await infoButton.click({ timeout: env.scraperActionTimeoutMs });
+      await this.clickActionButton(infoButton);
       await page.waitForTimeout(1000);
 
-      if (await this.isDetailVisible(page, config)) {
+      if (await this.isDetailVisible(page, config, snapshot)) {
         const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot);
         ads.push(ad);
         await options.onAd?.(ad);
@@ -246,9 +253,87 @@ export class FacebookAdLibraryScraper {
     return ads;
   }
 
-  private async isDetailVisible(page: Page, config: SelectorConfig) {
-    if ((await page.locator(config.detail.previewContainer).count().catch(() => 0)) > 0) return true;
-    return Boolean(await firstVisible(page, config.detail.ready, 600));
+  private async processGroupedTargetAd(
+    page: Page,
+    config: SelectorConfig,
+    competitorId: string,
+    sourceUrl: string,
+    parentSnapshot: CardSnapshot,
+    options: ScrapeCompetitorOptions
+  ) {
+    await firstVisible(page, config.group.ready, env.scraperActionTimeoutMs);
+    const targetLibraryId = parentSnapshot.facebook_library_id;
+    if (!targetLibraryId) {
+      throw new Error('Summary group opened, but source card has no library id');
+    }
+
+    const target = await this.findGroupVariationByLibraryId(page, config, targetLibraryId, options.signal);
+    if (!target) {
+      throw new Error(`Summary group opened, but variation ${targetLibraryId} was not found`);
+    }
+
+    await target.card.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
+    await this.clickActionButton(target.infoButton);
+    await page.waitForTimeout(1000);
+
+    if (!(await this.isDetailVisible(page, config, target.snapshot))) {
+      logScraper('warn', 'Target variation detail did not appear; using card fallback', { library_id: targetLibraryId });
+      const ad = await extractCardFallbackAd(target.card, config, competitorId, sourceUrl, target.snapshot);
+      await options.onAd?.(ad);
+      return [ad];
+    }
+
+    const ad = await extractDetailAd(page, config, competitorId, sourceUrl, target.snapshot);
+    await options.onAd?.(ad);
+    logScraper('info', 'Summary target variation extracted', { library_id: targetLibraryId });
+    return [ad];
+  }
+
+  private async findGroupVariationByLibraryId(
+    page: Page,
+    config: SelectorConfig,
+    libraryId: string,
+    signal?: AbortSignal
+  ) {
+    let previousCount = 0;
+    let stableRounds = 0;
+
+    for (let round = 0; round <= env.scraperMaxScrolls; round += 1) {
+      throwIfStopped(signal);
+      const buttons = this.resultInfoButtons(page, config);
+      const count = await buttons.count();
+
+      for (let index = 0; index < count; index += 1) {
+        const infoButton = buttons.nth(index);
+        const card = this.cardFromInfoButton(infoButton);
+        const snapshot = await extractCardSnapshot(card, config);
+        if (snapshot.facebook_library_id === libraryId) {
+          return { infoButton, card, snapshot };
+        }
+      }
+
+      logScraper('info', 'Summary group target not visible yet', {
+        library_id: libraryId,
+        visible_variations: count,
+        scroll_round: round + 1
+      });
+
+      if (count === previousCount) stableRounds += 1;
+      else stableRounds = 0;
+      if (stableRounds >= 2) return null;
+
+      previousCount = count;
+      await page.mouse.wheel(0, 1800);
+      await page.waitForTimeout(800);
+    }
+
+    return null;
+  }
+
+  private async isDetailVisible(page: Page, config: SelectorConfig, snapshot?: CardSnapshot) {
+    if (await firstVisible(page, config.detail.ready, 1200)) return true;
+    if (!snapshot) return false;
+    return this.hasVisiblePreviewForSnapshot(page, config, snapshot);
   }
 
   private async returnToGroup(page: Page, config: SelectorConfig) {
@@ -269,7 +354,81 @@ export class FacebookAdLibraryScraper {
     return page.locator(config.results.infoButton).filter({ visible: true });
   }
 
+  private resultSummaryButtons(page: Page, config: SelectorConfig) {
+    return config.results.summaryButtons
+      .map((selector) => page.locator(selector))
+      .reduce((merged, locator) => merged.or(locator))
+      .filter({ visible: true });
+  }
+
+  private resultActionButtons(page: Page, config: SelectorConfig) {
+    return this.resultInfoButtons(page, config).or(this.resultSummaryButtons(page, config)).filter({ visible: true });
+  }
+
+  private async clickActionButton(actionButton: Locator) {
+    await actionButton.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
+
+    try {
+      await actionButton.click({ timeout: 4000 });
+      return;
+    } catch {
+      // Meta often paints a visual preview layer over the button while the card is still clickable.
+    }
+
+    try {
+      await actionButton.click({ timeout: 4000, force: true });
+      return;
+    } catch {
+      // Fall back to a DOM click on the text node's nearest clickable parent.
+    }
+
+    await actionButton.evaluate((node) => {
+      const element = node instanceof HTMLElement ? node : node.parentElement;
+      const button = element?.closest('[role="button"]') ?? element;
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    });
+  }
+
+  private async hasVisiblePreviewForSnapshot(page: Page, config: SelectorConfig, snapshot: CardSnapshot) {
+    const candidates = [snapshot.title, ...(snapshot.body_text ?? '').split('\n')]
+      .map((line) => this.matchSnippet(line))
+      .filter((line) => line.length >= 20)
+      .slice(0, 4);
+
+    if (!candidates.length) return false;
+
+    const containers = page.locator(config.detail.previewContainer);
+    const count = await containers.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const container = containers.nth(index);
+      if (!(await container.isVisible().catch(() => false))) continue;
+      const text = await container.innerText({ timeout: 1000 }).catch(() => '');
+      const normalized = this.matchSnippet(text, 4000);
+      if (candidates.some((candidate) => normalized.includes(candidate))) return true;
+    }
+
+    return false;
+  }
+
+  private matchSnippet(text: string | null | undefined, maxLength = 90) {
+    const normalized = (text ?? '')
+      .replace(/\u200b/g, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+      .toLowerCase();
+    return normalized.length > maxLength ? normalized.slice(0, maxLength).trim() : normalized;
+  }
+
+  private isSummaryActionText(text: string, config: SelectorConfig) {
+    const normalized = text.trim().toLowerCase();
+    return config.results.summaryButtonLabels.some((label) => normalized.includes(label.toLowerCase()));
+  }
+
   private cardFromInfoButton(infoButton: Locator) {
     return infoButton.locator('xpath=ancestor::div[contains(., "ID Библиотеки:")][1]');
+  }
+
+  private cardFromActionButton(actionButton: Locator) {
+    return this.cardFromInfoButton(actionButton);
   }
 }
