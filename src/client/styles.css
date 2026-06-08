@@ -402,14 +402,16 @@ select,
 }
 
 .preview-thumb {
+  position: relative;
   width: 108px;
-  height: 126px;
+  height: auto;
+  aspect-ratio: var(--preview-aspect-ratio, 1 / 1);
   display: grid;
   place-items: center;
   overflow: hidden;
   border: 1px solid #ccd7dd;
   border-radius: 6px;
-  background: #fff;
+  background: #f3f6f8;
   padding: 0;
 }
 
@@ -417,7 +419,7 @@ select,
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .preview-placeholder {
@@ -426,6 +428,31 @@ select,
   line-height: 1.25;
   padding: 10px;
   text-align: center;
+}
+
+.video-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.32));
+  pointer-events: none;
+}
+
+.play-badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.9);
+  color: #172026;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.24);
+  pointer-events: none;
 }
 
 .empty {

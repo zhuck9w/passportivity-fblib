@@ -15,7 +15,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
   createCompetitor,
@@ -66,6 +66,17 @@ type PreviewImageCandidate = {
   src: string;
   score: number;
 };
+
+type PreviewMedia =
+  | {
+      type: 'image';
+      src: string;
+    }
+  | {
+      type: 'video';
+      src: string;
+      poster: string | null;
+    };
 
 function escapeHtml(value: string) {
   return value
@@ -126,6 +137,21 @@ function extractPreviewImageCandidates(html: string | null) {
     .sort((left, right) => right.score - left.score);
 }
 
+function extractPreviewVideo(html: string | null) {
+  if (!html || typeof DOMParser === 'undefined') return null;
+
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const video = document.querySelector('video');
+  const source = video?.getAttribute('src') || video?.querySelector('source[src]')?.getAttribute('src') || '';
+
+  if (!source) return null;
+
+  return {
+    src: source,
+    poster: video?.getAttribute('poster') || null
+  };
+}
+
 function useBestPreviewImage(html: string | null) {
   const candidates = useMemo(() => extractPreviewImageCandidates(html), [html]);
   const [imageUrl, setImageUrl] = useState(candidates[0]?.src ?? null);
@@ -169,7 +195,81 @@ function useBestPreviewImage(html: string | null) {
   return imageUrl;
 }
 
-function previewSrcDoc(ad: Ad, imageUrl: string | null) {
+function usePreviewMedia(html: string | null): PreviewMedia | null {
+  const video = useMemo(() => extractPreviewVideo(html), [html]);
+  const imageUrl = useBestPreviewImage(html);
+
+  if (video) {
+    return {
+      type: 'video',
+      src: video.src,
+      poster: video.poster || imageUrl
+    };
+  }
+
+  return imageUrl ? { type: 'image', src: imageUrl } : null;
+}
+
+function useMediaAspectRatio(src: string | null | undefined) {
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAspectRatio(null);
+    if (!src) return undefined;
+
+    if (/\.mp4(?:[?#]|$)/i.test(src)) {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        if (!cancelled && video.videoWidth > 0 && video.videoHeight > 0) {
+          setAspectRatio(video.videoWidth / video.videoHeight);
+        }
+      };
+      video.onerror = () => {
+        if (!cancelled) setAspectRatio(null);
+      };
+      video.src = src;
+
+      return () => {
+        cancelled = true;
+        video.removeAttribute('src');
+        video.load();
+      };
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
+        setAspectRatio(image.naturalWidth / image.naturalHeight);
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) setAspectRatio(null);
+    };
+    image.referrerPolicy = 'origin-when-cross-origin';
+    image.src = src;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  return aspectRatio;
+}
+
+function renderPreviewMedia(media: PreviewMedia | null) {
+  if (!media) return '<div class="media-empty">Медиа не найдено</div>';
+
+  if (media.type === 'video') {
+    const poster = media.poster ? ` poster="${escapeHtml(media.poster)}"` : '';
+    return `<video controls playsinline preload="metadata"${poster}><source src="${escapeHtml(media.src)}" type="video/mp4"></video>`;
+  }
+
+  return `<img src="${escapeHtml(media.src)}" referrerpolicy="origin-when-cross-origin" alt="">`;
+}
+
+function previewSrcDoc(ad: Ad, media: PreviewMedia | null) {
   const rawBody = getAdBodyText(ad);
   const body = rawBody || 'Текст объявления пока не сохранен.';
   const companyName = ad.competitors?.name ?? 'Company';
@@ -190,6 +290,7 @@ function previewSrcDoc(ad: Ad, imageUrl: string | null) {
     .title{font-weight:700;margin-bottom:6px}
     .media{background:#f7f8fa;border-top:1px solid #edf0f2;border-bottom:1px solid #edf0f2}
     .media img{display:block;width:100%;height:auto}
+    .media video{display:block;width:100%;height:auto;max-height:70vh;background:#000}
     .media-empty{padding:42px 14px;color:#65676b;text-align:center}
     .footer{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 12px;background:#f7f8fa}
     .domain{min-width:0;color:#65676b;font-size:12px;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -200,7 +301,7 @@ function previewSrcDoc(ad: Ad, imageUrl: string | null) {
       <div class="brand"><strong>${escapeHtml(companyName)}</strong><span>Реклама</span></div>
     </header>
     <section class="text">${title ? `<div class="title">${escapeHtml(title)}</div>` : ''}${escapeHtml(body)}</section>
-    <section class="media">${imageUrl ? `<img src="${escapeHtml(imageUrl)}" referrerpolicy="origin-when-cross-origin" alt="">` : '<div class="media-empty">Картинка не найдена</div>'}</section>
+    <section class="media">${renderPreviewMedia(media)}</section>
     <footer class="footer"><div class="domain">facebook.com</div>${cta ? `<div class="button">${escapeHtml(cta)}</div>` : ''}</footer>
   </article></div></body></html>`;
 }
@@ -779,21 +880,36 @@ function CompetitorsDialog({
 }
 
 function PreviewThumb({ ad, onOpen }: { ad: Ad; onOpen: () => void }) {
-  const imageUrl = useBestPreviewImage(ad.preview_html);
+  const media = usePreviewMedia(ad.preview_html);
+  const imageUrl = media?.type === 'video' ? media.poster : media?.src;
+  const aspectRatio = useMediaAspectRatio(imageUrl ?? (media?.type === 'video' ? media.src : null));
+  const style = aspectRatio
+    ? ({ '--preview-aspect-ratio': aspectRatio.toString() } as CSSProperties)
+    : undefined;
 
   return (
-    <button className="preview-thumb" onClick={onOpen} title="Открыть превью">
+    <button
+      className={`preview-thumb ${media?.type === 'video' ? 'video-thumb' : ''}`}
+      style={style}
+      onClick={onOpen}
+      title="Открыть превью"
+    >
       {imageUrl ? (
         <img src={imageUrl} alt="" referrerPolicy="origin-when-cross-origin" loading="lazy" />
       ) : (
-        <span className="preview-placeholder">нет картинки</span>
+        <span className="preview-placeholder">{media?.type === 'video' ? 'video' : 'нет картинки'}</span>
+      )}
+      {media?.type === 'video' && (
+        <span className="play-badge" aria-hidden="true">
+          <Play size={18} fill="currentColor" />
+        </span>
       )}
     </button>
   );
 }
 
 function PreviewModal({ ad, onClose }: { ad: Ad; onClose: () => void }) {
-  const imageUrl = useBestPreviewImage(ad.preview_html);
+  const media = usePreviewMedia(ad.preview_html);
 
   return (
     <div className="modal-backdrop preview-backdrop">
@@ -810,7 +926,8 @@ function PreviewModal({ ad, onClose }: { ad: Ad; onClose: () => void }) {
         <iframe
           title={`Ad preview ${ad.facebook_library_id}`}
           className="preview-frame"
-          srcDoc={previewSrcDoc(ad, imageUrl)}
+          srcDoc={previewSrcDoc(ad, media)}
+          allow="fullscreen; autoplay"
           sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         />
       </section>
