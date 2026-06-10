@@ -156,6 +156,7 @@ function saveTableLayout(layout: TableLayout) {
 
 const statusLabels: Record<string, string> = {
   active: 'Активно',
+  new: 'NEW',
   inactive: 'Inactive',
   unknown: 'Неизвестно',
   stopped: 'Остановлено'
@@ -621,16 +622,20 @@ function parseRuDate(value: string | null) {
 }
 
 function daysActive(ad: Ad) {
+  if (ad.status === 'stopped') return '';
+
   const start = parseRuDate(ad.start_date_text);
   if (!start) return '';
 
-  const stop = ad.status === 'active' ? new Date() : parseRuDate(ad.end_date_text) ?? new Date();
+  const stop = ad.status === 'active' || ad.status === 'new' ? new Date() : parseRuDate(ad.end_date_text) ?? new Date();
   const diff = stop.getTime() - start.getTime();
   return Math.max(0, Math.ceil(diff / 86_400_000)).toString();
 }
 
 function stopDay(ad: Ad) {
-  return ad.status === 'active' ? '' : (ad.end_date_text ?? '');
+  if (ad.status === 'active' || ad.status === 'new') return '';
+  if (ad.status === 'stopped') return formatDateTime(ad.stopped_at) || ad.end_date_text || '';
+  return ad.end_date_text ?? '';
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -1035,7 +1040,7 @@ export function App() {
       competitors: competitors.length,
       enabled: competitors.filter((competitor) => competitor.enabled).length,
       ads: ads.length,
-      active: ads.filter((ad) => ad.status === 'active').length
+      active: ads.filter((ad) => ad.status === 'active' || ad.status === 'new').length
     }),
     [ads, competitors]
   );
@@ -1184,7 +1189,9 @@ export function App() {
           onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
         >
           <option value="">Любой статус</option>
-          <option value="active">Активно</option>
+          <option value="active">Активно + new</option>
+          <option value="new">NEW</option>
+          <option value="stopped">Остановлено</option>
           <option value="inactive">Inactive</option>
           <option value="unknown">Неизвестно</option>
         </select>

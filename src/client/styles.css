@@ -683,6 +683,11 @@ select,
   color: #14733b;
 }
 
+.status-pill.new {
+  background: #e8f1ff;
+  color: #1557b0;
+}
+
 .status-pill.failed,
 .status-pill.inactive {
   background: #fff0ed;

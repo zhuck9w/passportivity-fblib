@@ -24,6 +24,28 @@ export type ScrapeRun = {
   created_at: string;
 };
 
+export type CompetitorScanRun = {
+  id: string;
+  run_id: string;
+  competitor_id: string;
+  previous_scan_id: string | null;
+  status: 'running' | 'succeeded' | 'failed' | 'stopped';
+  complete: boolean;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+};
+
+export type AdScanObservation = {
+  id: string;
+  scan_id: string;
+  competitor_id: string;
+  ad_id: string;
+  facebook_library_id: string;
+  observed_at: string;
+  created_at: string;
+};
+
 export type AdLocation = {
   id: string;
   ad_id: string;
@@ -83,6 +105,10 @@ export type Ad = {
   media_items: AdMediaItem[];
   dedupe_key: string;
   duplicate_count: number;
+  first_seen_scan_id: string | null;
+  last_seen_scan_id: string | null;
+  stopped_scan_id: string | null;
+  stopped_at: string | null;
   first_seen_at: string;
   last_seen_at: string;
   created_at: string;

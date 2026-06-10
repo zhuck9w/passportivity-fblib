@@ -1,9 +1,12 @@
 import type { Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
+  createCompetitorScanRun,
   createScrapeRun,
+  finishCompetitorScan,
   getCompetitor,
   listEnabledCompetitors,
   markCompetitorScraped,
+  recordAdScanObservation,
   updateScrapeRun,
   upsertScrapedAd
 } from './repositories';
@@ -112,9 +115,12 @@ export class ScrapeJobManager {
     for (const competitor of competitors) {
       if (limitReached) break;
       if (controller.signal.aborted) break;
+      const competitorScan = await createCompetitorScanRun(runId, competitor.id);
+      let competitorSaveErrors = 0;
       this.patch(runId, { message: `Собираю ${competitor.name}` });
       logScraper('info', 'Competitor scrape started', {
         run_id: runId,
+        scan_id: competitorScan.id,
         competitor: competitor.name,
         page_id: competitor.facebook_page_id
       });
@@ -128,9 +134,16 @@ export class ScrapeJobManager {
             adsFound += 1;
             try {
               const saved = await upsertScrapedAd(ad);
+              await recordAdScanObservation({
+                scanId: competitorScan.id,
+                competitorId: competitor.id,
+                adId: saved.ad.id,
+                facebookLibraryId: ad.facebook_library_id
+              });
               adsSaved += 1;
               logScraper('info', 'Ad saved', {
                 run_id: runId,
+                scan_id: competitorScan.id,
                 competitor: competitor.name,
                 library_id: ad.facebook_library_id,
                 existing: saved.isExisting
@@ -146,6 +159,7 @@ export class ScrapeJobManager {
                 controller.abort();
               }
             } catch (error) {
+              competitorSaveErrors += 1;
               const message = `${competitor.name} / ${ad.facebook_library_id}: ${
                 error instanceof Error ? error.message : String(error)
               }`;
@@ -155,17 +169,40 @@ export class ScrapeJobManager {
           }
         });
         errors.push(...result.errors.map((error) => `${competitor.name}: ${error}`));
+        const competitorComplete =
+          !controller.signal.aborted && !limitReached && result.errors.length === 0 && competitorSaveErrors === 0;
+        const competitorScanStatus = competitorComplete
+          ? 'succeeded'
+          : controller.signal.aborted || limitReached
+            ? 'stopped'
+            : 'failed';
+        const { reconciliation } = await finishCompetitorScan({
+          scanId: competitorScan.id,
+          status: competitorScanStatus,
+          complete: competitorComplete
+        });
         logScraper('info', 'Competitor scrape extracted ads', {
           run_id: runId,
+          scan_id: competitorScan.id,
           competitor: competitor.name,
           extracted_ads: result.ads.length,
-          extractor_errors: result.errors.length
+          extractor_errors: result.errors.length,
+          save_errors: competitorSaveErrors,
+          scan_complete: competitorComplete,
+          active_ads: reconciliation.activeIds.length,
+          new_ads: reconciliation.newIds.length,
+          stopped_ads: reconciliation.stoppedIds.length
         });
 
-        if (!controller.signal.aborted) {
+        if (competitorComplete) {
           await markCompetitorScraped(competitor.id);
         }
       } catch (error) {
+        await finishCompetitorScan({
+          scanId: competitorScan.id,
+          status: controller.signal.aborted || limitReached ? 'stopped' : 'failed',
+          complete: false
+        }).catch(() => undefined);
         if (limitReached) break;
         const message = controller.signal.aborted
           ? `${competitor.name}: остановлено пользователем`

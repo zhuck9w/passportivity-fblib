@@ -1,4 +1,5 @@
-import type { Ad, Competitor, ScrapedAdInput, ScrapeRun } from '../shared/types';
+import type { Ad, AdScanObservation, Competitor, CompetitorScanRun, ScrapedAdInput, ScrapeRun } from '../shared/types';
+import { reconcileScanLibraryIds, type ScanReconciliationResult } from './adStatusReconciliation';
 import { supabase } from './supabase';
 
 function throwIfError<T>(result: { data: T | null; error: { message: string } | null }) {
@@ -114,6 +115,148 @@ export async function listScrapeRuns() {
   return throwIfError<Array<ScrapeRun & { competitors?: Pick<Competitor, 'name' | 'facebook_page_id'> }>>(result);
 }
 
+export async function getLatestCompleteCompetitorScan(competitorId: string) {
+  const result = await supabase
+    .from('competitor_scan_runs')
+    .select('*')
+    .eq('competitor_id', competitorId)
+    .eq('status', 'succeeded')
+    .eq('complete', true)
+    .order('finished_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  return throwIfError<CompetitorScanRun | null>(result);
+}
+
+export async function createCompetitorScanRun(runId: string, competitorId: string) {
+  const previousScan = await getLatestCompleteCompetitorScan(competitorId);
+  const now = new Date().toISOString();
+  const result = await supabase
+    .from('competitor_scan_runs')
+    .insert({
+      run_id: runId,
+      competitor_id: competitorId,
+      previous_scan_id: previousScan?.id ?? null,
+      status: 'running',
+      started_at: now
+    })
+    .select('*')
+    .single();
+  return throwIfError<CompetitorScanRun>(result);
+}
+
+export async function recordAdScanObservation(input: {
+  scanId: string;
+  competitorId: string;
+  adId: string;
+  facebookLibraryId: string;
+}) {
+  const now = new Date().toISOString();
+  const result = await supabase
+    .from('ad_scan_observations')
+    .upsert(
+      {
+        scan_id: input.scanId,
+        competitor_id: input.competitorId,
+        ad_id: input.adId,
+        facebook_library_id: input.facebookLibraryId,
+        observed_at: now
+      },
+      { onConflict: 'scan_id,competitor_id,facebook_library_id' }
+    )
+    .select('*')
+    .single();
+  return throwIfError<AdScanObservation>(result);
+}
+
+async function listObservationLibraryIds(scanId: string) {
+  const result = await supabase
+    .from('ad_scan_observations')
+    .select('facebook_library_id')
+    .eq('scan_id', scanId);
+  const rows = throwIfError<Array<Pick<AdScanObservation, 'facebook_library_id'>>>(result);
+  return rows.map((row) => row.facebook_library_id);
+}
+
+async function updateAdsByLibraryIds(competitorId: string, libraryIds: string[], patch: Record<string, unknown>) {
+  if (!libraryIds.length) return;
+  const result = await supabase
+    .from('ads')
+    .update(patch)
+    .eq('competitor_id', competitorId)
+    .in('facebook_library_id', libraryIds);
+  throwIfError<null>(result as { data: null; error: { message: string } | null });
+}
+
+async function reconcileCompetitorScan(scan: CompetitorScanRun, finishedAt: string): Promise<ScanReconciliationResult> {
+  const currentIds = await listObservationLibraryIds(scan.id);
+  const previousIds = scan.previous_scan_id ? await listObservationLibraryIds(scan.previous_scan_id) : [];
+  const reconciliation = reconcileScanLibraryIds(previousIds, currentIds, Boolean(scan.previous_scan_id));
+  const basePatch = {
+    last_seen_scan_id: scan.id,
+    stopped_scan_id: null,
+    stopped_at: null,
+    updated_at: finishedAt
+  };
+
+  await updateAdsByLibraryIds(scan.competitor_id, reconciliation.activeIds, {
+    ...basePatch,
+    status: 'active'
+  });
+
+  await updateAdsByLibraryIds(scan.competitor_id, reconciliation.newIds, {
+    ...basePatch,
+    status: 'new'
+  });
+
+  const currentReconciledIds = Array.from(new Set([...reconciliation.activeIds, ...reconciliation.newIds]));
+  if (currentReconciledIds.length) {
+    const result = await supabase
+      .from('ads')
+      .update({ first_seen_scan_id: scan.id, updated_at: finishedAt })
+      .eq('competitor_id', scan.competitor_id)
+      .in('facebook_library_id', currentReconciledIds)
+      .is('first_seen_scan_id', null);
+    throwIfError<null>(result as { data: null; error: { message: string } | null });
+  }
+
+  await updateAdsByLibraryIds(scan.competitor_id, reconciliation.stoppedIds, {
+    status: 'stopped',
+    stopped_scan_id: scan.id,
+    stopped_at: finishedAt,
+    updated_at: finishedAt
+  });
+
+  return reconciliation;
+}
+
+export async function finishCompetitorScan(input: {
+  scanId: string;
+  status: CompetitorScanRun['status'];
+  complete: boolean;
+  finishedAt?: string;
+}) {
+  const finishedAt = input.finishedAt ?? new Date().toISOString();
+  const updateResult = await supabase
+    .from('competitor_scan_runs')
+    .update({
+      status: input.status,
+      complete: input.complete,
+      finished_at: finishedAt
+    })
+    .eq('id', input.scanId)
+    .select('*')
+    .single();
+  const scan = throwIfError<CompetitorScanRun>(updateResult);
+
+  const reconciliation =
+    input.status === 'succeeded' && input.complete
+      ? await reconcileCompetitorScan(scan, finishedAt)
+      : { activeIds: [], newIds: [], stoppedIds: [] };
+
+  return { scan, reconciliation };
+}
+
 export async function listAds(filters: {
   competitorId?: string;
   status?: string;
@@ -127,7 +270,8 @@ export async function listAds(filters: {
     .limit(250);
 
   if (filters.competitorId) query = query.eq('competitor_id', filters.competitorId);
-  if (filters.status) query = query.eq('status', filters.status);
+  if (filters.status === 'active') query = query.in('status', ['active', 'new']);
+  else if (filters.status) query = query.eq('status', filters.status);
   if (filters.platform) query = query.contains('platforms', [filters.platform]);
   if (filters.q) {
     query = query.or(`title.ilike.%${filters.q}%,body_text.ilike.%${filters.q}%,preview_text.ilike.%${filters.q}%`);
@@ -171,6 +315,8 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         preview_html: input.preview_html ?? existing.preview_html,
         preview_text: input.preview_text ?? existing.preview_text,
         media_items: input.media_items ?? existing.media_items ?? [],
+        stopped_scan_id: null,
+        stopped_at: null,
         last_seen_at: now,
         updated_at: now
       })
