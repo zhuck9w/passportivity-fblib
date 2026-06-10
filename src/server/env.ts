@@ -22,6 +22,12 @@ function readOptional(name: string) {
   return value || undefined;
 }
 
+function readBoolean(name: string, fallback: boolean) {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
 const defaultScraperLimit = readNumber('SCRAPER_MAX_ADS', 25);
 
 const serverKey =
@@ -46,6 +52,7 @@ export const env = {
   scraperUserDataDir: readOptional('SCRAPER_USER_DATA_DIR'),
   scraperSlowMoMs: readNumber('SCRAPER_SLOW_MO_MS', 0),
   scraperLimit: readNumber('SCRAPER_LIMIT', defaultScraperLimit),
+  scraperCollectCarousels: readBoolean('SCRAPER_COLLECT_CAROUSELS', true),
   scraperMaxAds: defaultScraperLimit,
   scraperMaxScrolls: readNumber('SCRAPER_MAX_SCROLLS', 12),
   scraperNavigationTimeoutMs: readNumber('SCRAPER_NAVIGATION_TIMEOUT_MS', 45000),

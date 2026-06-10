@@ -55,6 +55,7 @@ async function restoreVariation(variation: AdVariation) {
     cta: variation.cta,
     preview_html: variation.preview_html,
     preview_text: variation.preview_text,
+    media_items: variation.media_items ?? [],
     dedupe_key: variation.facebook_library_id,
     duplicate_count: 1,
     last_seen_at: variation.seen_at ?? now,

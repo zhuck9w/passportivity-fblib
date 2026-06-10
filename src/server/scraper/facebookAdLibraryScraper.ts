@@ -4,7 +4,14 @@ import { buildAdLibraryUrl } from '../../shared/adLibraryUrl';
 import type { Competitor, ScrapedAdInput } from '../../shared/types';
 import { env } from '../env';
 import { logScraper } from '../logger';
-import { extractCardFallbackAd, extractCardSnapshot, extractDetailAd, type CardSnapshot } from './extractors';
+import {
+  extractCardFallbackAd,
+  extractCardMediaSnapshot,
+  extractCardSnapshot,
+  extractDetailAd,
+  type CardMediaSnapshot,
+  type CardSnapshot
+} from './extractors';
 import { clickFirstVisible, firstVisible, loadSelectorConfig, type SelectorConfig } from './selectors';
 
 export type ScrapeCompetitorResult = {
@@ -14,6 +21,7 @@ export type ScrapeCompetitorResult = {
 
 type ScrapeCompetitorOptions = {
   limit?: number;
+  collectCarousels?: boolean;
   signal?: AbortSignal;
   onAd?: (ad: ScrapedAdInput) => Promise<void> | void;
 };
@@ -34,6 +42,7 @@ export class FacebookAdLibraryScraper {
   async scrapeCompetitor(competitor: Competitor, options: ScrapeCompetitorOptions = {}): Promise<ScrapeCompetitorResult> {
     const config = await this.configPromise;
     const limit = options.limit ?? env.scraperMaxAds;
+    const collectCarousels = options.collectCarousels ?? env.scraperCollectCarousels;
     const sourceUrl = buildAdLibraryUrl(competitor.facebook_page_id);
     let browser: Browser | null = null;
     let context: BrowserContext;
@@ -67,6 +76,8 @@ export class FacebookAdLibraryScraper {
     };
     options.signal?.addEventListener('abort', stopHandler, { once: true });
     const page = await context.newPage();
+    await page.addInitScript('globalThis.__name = globalThis.__name || ((target) => target)');
+    await page.evaluate('globalThis.__name = globalThis.__name || ((target) => target)').catch(() => undefined);
     const ads: ScrapedAdInput[] = [];
     const errors: string[] = [];
 
@@ -75,7 +86,8 @@ export class FacebookAdLibraryScraper {
       logScraper('info', 'Opening Ad Library page', {
         competitor: competitor.name,
         page_id: competitor.facebook_page_id,
-        limit
+        limit,
+        collect_carousels: collectCarousels
       });
       await this.openResults(page, sourceUrl, config);
       await this.scrollResults(page, config, limit);
@@ -102,7 +114,23 @@ export class FacebookAdLibraryScraper {
           const actionButton = this.resultActionButtons(page, config).nth(index);
           const card = this.cardFromActionButton(actionButton);
           const snapshot = await extractCardSnapshot(card, config);
-          const extracted = await this.processResultCard(page, config, competitor.id, sourceUrl, snapshot, index, options);
+          const cardMedia = await extractCardMediaSnapshot(card, options.collectCarousels ?? env.scraperCollectCarousels);
+          logScraper('info', 'Result card media extracted', {
+            competitor: competitor.name,
+            card_number: index + 1,
+            library_id: snapshot.facebook_library_id,
+            card_media_items: cardMedia.media_items.length
+          });
+          const extracted = await this.processResultCard(
+            page,
+            config,
+            competitor.id,
+            sourceUrl,
+            snapshot,
+            cardMedia,
+            index,
+            options
+          );
           ads.push(...extracted);
           logScraper('info', 'Card processed', {
             competitor: competitor.name,
@@ -186,6 +214,7 @@ export class FacebookAdLibraryScraper {
     competitorId: string,
     sourceUrl: string,
     snapshot: CardSnapshot,
+    cardMedia: CardMediaSnapshot,
     index: number,
     options: ScrapeCompetitorOptions
   ) {
@@ -198,19 +227,23 @@ export class FacebookAdLibraryScraper {
 
     if (isSummaryAction) {
       logScraper('info', 'Opened summary group', { library_id: snapshot.facebook_library_id });
-      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options);
+      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options, cardMedia);
     }
 
     if (await this.isDetailVisible(page, config, snapshot)) {
       logScraper('info', 'Opened single ad detail', { library_id: snapshot.facebook_library_id });
-      const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot);
+      const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot, {
+        collectCarousels: options.collectCarousels ?? env.scraperCollectCarousels,
+        mediaItems: cardMedia.media_items,
+        previewHtml: cardMedia.html
+      });
       await options.onAd?.(ad);
       return [ad];
     }
 
     if (await firstVisible(page, config.group.ready, 1200)) {
       logScraper('info', 'Opened grouped ad detail', { library_id: snapshot.facebook_library_id });
-      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options);
+      return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options, cardMedia);
     }
 
     throw new Error('Opened card, but neither detail preview nor group view appeared');
@@ -234,12 +267,17 @@ export class FacebookAdLibraryScraper {
       const infoButton = variationButtons.nth(index);
       const variationCard = this.cardFromInfoButton(infoButton);
       const snapshot = await extractCardSnapshot(variationCard, config);
+      const cardMedia = await extractCardMediaSnapshot(variationCard, options.collectCarousels ?? env.scraperCollectCarousels);
       await variationCard.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
       await this.clickActionButton(infoButton);
       await page.waitForTimeout(1000);
 
       if (await this.isDetailVisible(page, config, snapshot)) {
-        const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot);
+        const ad = await extractDetailAd(page, config, competitorId, sourceUrl, snapshot, {
+          collectCarousels: options.collectCarousels ?? env.scraperCollectCarousels,
+          mediaItems: cardMedia.media_items,
+          previewHtml: cardMedia.html
+        });
         ads.push(ad);
         await options.onAd?.(ad);
         logScraper('info', 'Variation extracted', {
@@ -259,7 +297,8 @@ export class FacebookAdLibraryScraper {
     competitorId: string,
     sourceUrl: string,
     parentSnapshot: CardSnapshot,
-    options: ScrapeCompetitorOptions
+    options: ScrapeCompetitorOptions,
+    sourceCardMedia?: CardMediaSnapshot
   ) {
     await firstVisible(page, config.group.ready, env.scraperActionTimeoutMs);
     const targetLibraryId = parentSnapshot.facebook_library_id;
@@ -273,17 +312,31 @@ export class FacebookAdLibraryScraper {
     }
 
     await target.card.scrollIntoViewIfNeeded({ timeout: env.scraperActionTimeoutMs }).catch(() => undefined);
+    const targetCardMedia = await extractCardMediaSnapshot(target.card, options.collectCarousels ?? env.scraperCollectCarousels);
+    const cardMedia = targetCardMedia.media_items.length ? targetCardMedia : sourceCardMedia;
+    logScraper('info', 'Target card media extracted', {
+      library_id: targetLibraryId,
+      card_media_items: cardMedia?.media_items.length ?? 0
+    });
     await this.clickActionButton(target.infoButton);
     await page.waitForTimeout(1000);
 
     if (!(await this.isDetailVisible(page, config, target.snapshot))) {
       logScraper('warn', 'Target variation detail did not appear; using card fallback', { library_id: targetLibraryId });
-      const ad = await extractCardFallbackAd(target.card, config, competitorId, sourceUrl, target.snapshot);
+      const ad = await extractCardFallbackAd(target.card, config, competitorId, sourceUrl, target.snapshot, {
+        collectCarousels: options.collectCarousels ?? env.scraperCollectCarousels,
+        mediaItems: cardMedia?.media_items,
+        previewHtml: cardMedia?.html
+      });
       await options.onAd?.(ad);
       return [ad];
     }
 
-    const ad = await extractDetailAd(page, config, competitorId, sourceUrl, target.snapshot);
+    const ad = await extractDetailAd(page, config, competitorId, sourceUrl, target.snapshot, {
+      collectCarousels: options.collectCarousels ?? env.scraperCollectCarousels,
+      mediaItems: cardMedia?.media_items,
+      previewHtml: cardMedia?.html
+    });
     await options.onAd?.(ad);
     logScraper('info', 'Summary target variation extracted', { library_id: targetLibraryId });
     return [ad];

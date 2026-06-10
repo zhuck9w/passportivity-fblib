@@ -39,6 +39,7 @@ create table if not exists public.ads (
   cta text,
   preview_html text,
   preview_text text,
+  media_items jsonb not null default '[]'::jsonb,
   dedupe_key text not null,
   duplicate_count integer not null default 1,
   first_seen_at timestamptz not null default now(),
@@ -62,6 +63,7 @@ create table if not exists public.ad_variations (
   cta text,
   preview_html text,
   preview_text text,
+  media_items jsonb not null default '[]'::jsonb,
   dedupe_key text not null,
   source_url text not null,
   seen_at timestamptz not null default now(),
@@ -95,6 +97,9 @@ alter table public.ads add constraint ads_competitor_facebook_library_id_key
 alter table public.scrape_runs drop constraint if exists scrape_runs_status_check;
 alter table public.scrape_runs add constraint scrape_runs_status_check
   check (status in ('pending', 'running', 'succeeded', 'failed', 'stopped'));
+
+alter table public.ads add column if not exists media_items jsonb not null default '[]'::jsonb;
+alter table public.ad_variations add column if not exists media_items jsonb not null default '[]'::jsonb;
 
 alter table public.competitors enable row level security;
 alter table public.scrape_runs enable row level security;

@@ -34,6 +34,15 @@ export type AdLocation = {
   created_at: string;
 };
 
+export type AdMediaItem = {
+  type: 'image' | 'video';
+  src: string;
+  poster?: string | null;
+  link_url?: string | null;
+  source?: 'preview' | 'carousel';
+  position: number;
+};
+
 export type AdVariation = {
   id: string;
   ad_id: string;
@@ -48,6 +57,7 @@ export type AdVariation = {
   cta: string | null;
   preview_html: string | null;
   preview_text: string | null;
+  media_items: AdMediaItem[];
   dedupe_key: string;
   source_url: string;
   seen_at: string;
@@ -70,6 +80,7 @@ export type Ad = {
   cta: string | null;
   preview_html: string | null;
   preview_text: string | null;
+  media_items: AdMediaItem[];
   dedupe_key: string;
   duplicate_count: number;
   first_seen_at: string;
@@ -100,6 +111,7 @@ export type ScrapedAdInput = {
   cta?: string | null;
   preview_html?: string | null;
   preview_text?: string | null;
+  media_items?: AdMediaItem[];
   dedupe_key: string;
   locations: ScrapedLocationInput[];
 };
@@ -115,5 +127,6 @@ export type ScrapeJobSnapshot = {
   duplicates_found: number;
   limit?: number;
   limit_reached?: boolean;
+  collect_carousels?: boolean;
   errors: string[];
 };

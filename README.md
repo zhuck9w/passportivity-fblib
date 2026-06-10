@@ -31,6 +31,7 @@ SCRAPER_BROWSER_CHANNEL=chrome
 SCRAPER_USER_DATA_DIR=.playwright-profile
 SCRAPER_SLOW_MO_MS=250
 SCRAPER_LIMIT=25
+SCRAPER_COLLECT_CAROUSELS=true
 ```
 
 `SUPABASE_SECRET_KEY` желателен для backend-записи. В текущей локальной настройке также поддерживается имя `SECRET`. Если оставить только publishable key, запись будет работать только при разрешающих RLS/GRANT настройках из SQL.
@@ -51,6 +52,8 @@ SCRAPER_SLOW_MO_MS=0
 `SCRAPER_LIMIT=25` задает системный лимит успешно сохраненных объявлений на один запуск. Когда лимит достигнут, сбор закрывает браузер и завершается со статусом `succeeded`.
 
 `SCRAPER_MAX_ADS` остается техническим лимитом карточек/скролла на конкурента. Обычно достаточно держать `SCRAPER_LIMIT` и `SCRAPER_MAX_ADS` одинаковыми.
+
+`SCRAPER_COLLECT_CAROUSELS=true` включает проход по горизонтальным каруселям (`data-type="hscroll-child"`) и сохранение каждого слайда в `media_items`. Если нужно временно ускорить сбор или проверить старое поведение, поставьте `false`.
 
 Сбор по умолчанию идет только по текущим активным объявлениям Facebook Ad Library:
 
@@ -210,6 +213,12 @@ npm run scrape
 
 ```bash
 npm run scrape -- --competitor=<uuid из Supabase> --limit=10
+```
+
+Отключить сбор каруселей для разового CLI-запуска:
+
+```bash
+npm run scrape -- --no-carousels
 ```
 
 ## Проверки

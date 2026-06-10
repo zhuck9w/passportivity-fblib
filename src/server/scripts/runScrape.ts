@@ -3,8 +3,9 @@ import { scrapeJobManager } from '../scrapeJobManager';
 const competitorId = process.argv.find((arg) => arg.startsWith('--competitor='))?.split('=')[1];
 const limitArg = process.argv.find((arg) => arg.startsWith('--limit='))?.split('=')[1];
 const limit = limitArg ? Number(limitArg) : undefined;
+const collectCarousels = !process.argv.includes('--no-carousels');
 
-const job = await scrapeJobManager.start({ competitorId, limit });
+const job = await scrapeJobManager.start({ competitorId, limit, collectCarousels });
 console.log(`Started scrape run ${job.run_id}`);
 
 while (true) {

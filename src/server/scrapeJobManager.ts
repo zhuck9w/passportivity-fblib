@@ -16,9 +16,10 @@ export class ScrapeJobManager {
   private readonly controllers = new Map<string, AbortController>();
   private readonly scraper = new FacebookAdLibraryScraper();
 
-  async start(input: { competitorId?: string; limit?: number }) {
+  async start(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
     const competitors = await this.resolveCompetitors(input.competitorId);
     const runLimit = Math.max(1, input.limit ?? env.scraperLimit);
+    const collectCarousels = input.collectCarousels ?? env.scraperCollectCarousels;
     const run = await createScrapeRun(input.competitorId ?? null);
     const controller = new AbortController();
     const snapshot: ScrapeJobSnapshot = {
@@ -31,6 +32,7 @@ export class ScrapeJobManager {
       duplicates_found: 0,
       limit: runLimit,
       limit_reached: false,
+      collect_carousels: collectCarousels,
       errors: []
     };
     this.jobs.set(run.id, snapshot);
@@ -38,10 +40,11 @@ export class ScrapeJobManager {
     logScraper('info', 'Scrape run started', {
       run_id: run.id,
       competitors: competitors.map((competitor) => competitor.name),
-      limit: runLimit
+      limit: runLimit,
+      collect_carousels: collectCarousels
     });
 
-    void this.run(run.id, competitors, controller, runLimit).catch((error) => {
+    void this.run(run.id, competitors, controller, runLimit, collectCarousels).catch((error) => {
       const current = this.jobs.get(run.id);
       const message = error instanceof Error ? error.message : String(error);
       logScraper('error', 'Scrape run crashed', { run_id: run.id, error: message });
@@ -91,7 +94,13 @@ export class ScrapeJobManager {
     return competitors;
   }
 
-  private async run(runId: string, competitors: Competitor[], controller: AbortController, limit: number) {
+  private async run(
+    runId: string,
+    competitors: Competitor[],
+    controller: AbortController,
+    limit: number,
+    collectCarousels: boolean
+  ) {
     const snapshot = this.jobs.get(runId);
     if (!snapshot) return;
 
@@ -112,6 +121,7 @@ export class ScrapeJobManager {
       try {
         const result = await this.scraper.scrapeCompetitor(competitor, {
           limit: Math.max(1, limit - adsSaved),
+          collectCarousels,
           signal: controller.signal,
           onAd: async (ad) => {
             if (limitReached) return;
@@ -199,6 +209,7 @@ export class ScrapeJobManager {
       ads_saved: adsSaved,
       limit,
       limit_reached: limitReached,
+      collect_carousels: collectCarousels,
       duplicates_found: 0,
       errors
     });

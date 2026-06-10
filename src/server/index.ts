@@ -30,7 +30,8 @@ const competitorUpdateSchema = competitorCreateSchema.partial();
 
 const scrapeStartSchema = z.object({
   competitor_id: z.string().uuid().optional(),
-  limit: z.number().int().positive().max(500).optional()
+  limit: z.number().int().positive().max(500).optional(),
+  collect_carousels: z.boolean().optional()
 });
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
@@ -48,7 +49,8 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     using_publishable_key_for_server: env.usingPublishableKeyForServer,
     scraper_headless: env.scraperHeadless,
-    scraper_limit: env.scraperLimit
+    scraper_limit: env.scraperLimit,
+    scraper_collect_carousels: env.scraperCollectCarousels
   });
 });
 
@@ -132,7 +134,13 @@ app.post(
   '/api/scrape',
   asyncRoute(async (req, res) => {
     const input = scrapeStartSchema.parse(req.body ?? {});
-    res.status(202).json(await scrapeJobManager.start({ competitorId: input.competitor_id, limit: input.limit }));
+    res.status(202).json(
+      await scrapeJobManager.start({
+        competitorId: input.competitor_id,
+        limit: input.limit,
+        collectCarousels: input.collect_carousels
+      })
+    );
   })
 );
 

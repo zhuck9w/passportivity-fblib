@@ -58,10 +58,14 @@ export function fetchAd(id: string) {
   return api<Ad>(`/api/ads/${id}`);
 }
 
-export function startScrape(input: { competitorId?: string; limit?: number }) {
+export function startScrape(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
   return api<ScrapeJobSnapshot>('/api/scrape', {
     method: 'POST',
-    body: JSON.stringify({ competitor_id: input.competitorId, limit: input.limit })
+    body: JSON.stringify({
+      competitor_id: input.competitorId,
+      limit: input.limit,
+      collect_carousels: input.collectCarousels
+    })
   });
 }
 

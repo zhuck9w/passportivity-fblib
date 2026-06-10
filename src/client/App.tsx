@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
-import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot } from '../shared/types';
+import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
   createCompetitor,
   deleteCompetitor,
@@ -67,15 +67,22 @@ type PreviewImageCandidate = {
   score: number;
 };
 
-type PreviewMedia =
+type PreviewMediaItem =
   | {
       type: 'image';
       src: string;
+      poster?: string | null;
+      link_url?: string | null;
+      source?: 'preview' | 'carousel';
+      position: number;
     }
   | {
       type: 'video';
       src: string;
       poster: string | null;
+      link_url?: string | null;
+      source?: 'preview' | 'carousel';
+      position: number;
     };
 
 function escapeHtml(value: string) {
@@ -105,6 +112,96 @@ function scorePreviewImage(src: string, index: number, total: number, element?: 
   }
 
   return score;
+}
+
+function isUsableMediaSrc(src: string | null | undefined) {
+  return Boolean(src && !src.startsWith('data:') && !src.startsWith('blob:'));
+}
+
+function linkFromElement(element: Element) {
+  return element.querySelector<HTMLAnchorElement>('a[href]')?.href ?? null;
+}
+
+function uniqueMediaItems(items: PreviewMediaItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.src)) return false;
+    seen.add(item.src);
+    return true;
+  });
+}
+
+function normalizeStoredMediaItems(items: AdMediaItem[] | null | undefined) {
+  return uniqueMediaItems(
+    (items ?? [])
+      .filter((item) => isUsableMediaSrc(item.src))
+      .map((item, index) => ({
+        type: item.type,
+        src: item.src,
+        poster: item.poster ?? null,
+        link_url: item.link_url ?? null,
+        source: item.source ?? 'preview',
+        position: item.position ?? index
+      }))
+  );
+}
+
+function extractVideoItem(scope: Element, position: number, source: 'preview' | 'carousel'): PreviewMediaItem | null {
+  const video = Array.from(scope.querySelectorAll<HTMLVideoElement>('video')).find((element) =>
+    isUsableMediaSrc(element.getAttribute('src') || element.querySelector('source[src]')?.getAttribute('src'))
+  );
+  const src = video?.getAttribute('src') || video?.querySelector('source[src]')?.getAttribute('src') || '';
+  if (!isUsableMediaSrc(src)) return null;
+
+  return {
+    type: 'video',
+    src,
+    poster: video?.getAttribute('poster') || null,
+    link_url: linkFromElement(scope),
+    source,
+    position
+  };
+}
+
+function extractImageItem(scope: Element, position: number, source: 'preview' | 'carousel'): PreviewMediaItem | null {
+  const images = Array.from(scope.querySelectorAll<HTMLImageElement>('img[src]'))
+    .map((element, index, all) => ({
+      element,
+      src: element.getAttribute('src') || '',
+      score: scorePreviewImage(element.getAttribute('src') || '', index, all.length, element)
+    }))
+    .filter((item) => isUsableMediaSrc(item.src))
+    .sort((left, right) => right.score - left.score);
+  const best = images[0];
+  if (!best) return null;
+
+  return {
+    type: 'image',
+    src: best.src,
+    poster: null,
+    link_url: linkFromElement(scope),
+    source,
+    position
+  };
+}
+
+function extractMediaItem(scope: Element, position: number, source: 'preview' | 'carousel') {
+  return extractVideoItem(scope, position, source) ?? extractImageItem(scope, position, source);
+}
+
+function extractCarouselMediaItems(html: string | null) {
+  if (!html || typeof DOMParser === 'undefined') return [];
+
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const children = Array.from(document.querySelectorAll<HTMLElement>('[data-type="hscroll-child"]'));
+  if (children.length <= 1) return [];
+
+  return uniqueMediaItems(
+    children
+      .map((child, index) => extractMediaItem(child, index, 'carousel'))
+      .filter((item): item is PreviewMediaItem => Boolean(item))
+      .map((item, index) => ({ ...item, position: index }))
+  );
 }
 
 function extractPreviewImageCandidates(html: string | null) {
@@ -137,7 +234,7 @@ function extractPreviewImageCandidates(html: string | null) {
     .sort((left, right) => right.score - left.score);
 }
 
-function extractPreviewVideo(html: string | null) {
+function extractPreviewVideo(html: string | null): PreviewMediaItem | null {
   if (!html || typeof DOMParser === 'undefined') return null;
 
   const document = new DOMParser().parseFromString(html, 'text/html');
@@ -147,8 +244,12 @@ function extractPreviewVideo(html: string | null) {
   if (!source) return null;
 
   return {
+    type: 'video',
     src: source,
-    poster: video?.getAttribute('poster') || null
+    poster: video?.getAttribute('poster') || null,
+    link_url: linkFromElement(document.body),
+    source: 'preview',
+    position: 0
   };
 }
 
@@ -195,19 +296,18 @@ function useBestPreviewImage(html: string | null) {
   return imageUrl;
 }
 
-function usePreviewMedia(html: string | null): PreviewMedia | null {
-  const video = useMemo(() => extractPreviewVideo(html), [html]);
-  const imageUrl = useBestPreviewImage(html);
+function usePreviewMediaItems(ad: Ad): PreviewMediaItem[] {
+  const storedItems = useMemo(() => normalizeStoredMediaItems(ad.media_items), [ad.media_items]);
+  const carouselItems = useMemo(() => extractCarouselMediaItems(ad.preview_html), [ad.preview_html]);
+  const video = useMemo(() => extractPreviewVideo(ad.preview_html), [ad.preview_html]);
+  const imageUrl = useBestPreviewImage(ad.preview_html);
 
-  if (video) {
-    return {
-      type: 'video',
-      src: video.src,
-      poster: video.poster || imageUrl
-    };
-  }
-
-  return imageUrl ? { type: 'image', src: imageUrl } : null;
+  return useMemo(() => {
+    if (storedItems.length) return storedItems;
+    if (carouselItems.length > 1) return carouselItems;
+    if (video) return [{ ...video, poster: video.poster || imageUrl }];
+    return imageUrl ? [{ type: 'image', src: imageUrl, poster: null, link_url: null, source: 'preview', position: 0 }] : [];
+  }, [carouselItems, imageUrl, storedItems, video]);
 }
 
 function useMediaAspectRatio(src: string | null | undefined) {
@@ -258,23 +358,63 @@ function useMediaAspectRatio(src: string | null | undefined) {
   return aspectRatio;
 }
 
-function renderPreviewMedia(media: PreviewMedia | null) {
-  if (!media) return '<div class="media-empty">Медиа не найдено</div>';
-
-  if (media.type === 'video') {
-    const poster = media.poster ? ` poster="${escapeHtml(media.poster)}"` : '';
-    return `<video controls playsinline preload="metadata"${poster}><source src="${escapeHtml(media.src)}" type="video/mp4"></video>`;
+function renderMediaElement(item: PreviewMediaItem) {
+  if (item.type === 'video') {
+    const poster = item.poster ? ` poster="${escapeHtml(item.poster)}"` : '';
+    return `<video controls playsinline preload="metadata"${poster}><source src="${escapeHtml(item.src)}" type="video/mp4"></video>`;
   }
 
-  return `<img src="${escapeHtml(media.src)}" referrerpolicy="origin-when-cross-origin" alt="">`;
+  const image = `<img src="${escapeHtml(item.src)}" referrerpolicy="origin-when-cross-origin" alt="">`;
+  return item.link_url ? `<a class="media-link" href="${escapeHtml(item.link_url)}">${image}</a>` : image;
 }
 
-function previewSrcDoc(ad: Ad, media: PreviewMedia | null) {
+function renderCarouselScript(enabled: boolean) {
+  if (!enabled) return '';
+
+  return `<script>
+    (function () {
+      document.querySelectorAll('[data-carousel]').forEach(function (carousel) {
+        var track = carousel.querySelector('.carousel-track');
+        var slides = carousel.querySelectorAll('.carousel-slide');
+        var prev = carousel.querySelector('[data-prev]');
+        var next = carousel.querySelector('[data-next]');
+        var counter = carousel.querySelector('[data-counter]');
+        var current = 0;
+        function go(index) {
+          if (!track || !slides.length) return;
+          current = (index + slides.length) % slides.length;
+          track.style.transform = 'translateX(' + (-current * 100) + '%)';
+          if (counter) counter.textContent = (current + 1) + ' / ' + slides.length;
+        }
+        if (prev) prev.addEventListener('click', function () { go(current - 1); });
+        if (next) next.addEventListener('click', function () { go(current + 1); });
+        go(0);
+      });
+    })();
+  </script>`;
+}
+
+function renderPreviewMedia(mediaItems: PreviewMediaItem[]) {
+  if (!mediaItems.length) return '<div class="media-empty">Медиа не найдено</div>';
+  if (mediaItems.length === 1) return renderMediaElement(mediaItems[0]);
+
+  return `<div class="carousel" data-carousel>
+    <div class="carousel-track">
+      ${mediaItems.map((item) => `<div class="carousel-slide">${renderMediaElement(item)}</div>`).join('')}
+    </div>
+    <button class="carousel-nav carousel-prev" type="button" data-prev aria-label="Previous">‹</button>
+    <button class="carousel-nav carousel-next" type="button" data-next aria-label="Next">›</button>
+    <div class="carousel-counter" data-counter>1 / ${mediaItems.length}</div>
+  </div>`;
+}
+
+function previewSrcDoc(ad: Ad, mediaItems: PreviewMediaItem[]) {
   const rawBody = getAdBodyText(ad);
   const body = rawBody || 'Текст объявления пока не сохранен.';
   const companyName = ad.competitors?.name ?? 'Company';
   const title = ad.title && !body.startsWith(ad.title) ? ad.title : '';
   const cta = ad.cta || '';
+  const hasCarousel = mediaItems.length > 1;
 
   return `<!doctype html><html><head><base target="_blank"><meta charset="utf-8"><style>
     *{box-sizing:border-box}
@@ -288,10 +428,19 @@ function previewSrcDoc(ad: Ad, media: PreviewMedia | null) {
     .brand span{font-size:12px;color:#65676b}
     .text{padding:0 14px 12px;font-size:14px;line-height:1.38;white-space:pre-wrap}
     .title{font-weight:700;margin-bottom:6px}
-    .media{background:#f7f8fa;border-top:1px solid #edf0f2;border-bottom:1px solid #edf0f2}
+    .media{background:#f7f8fa;border-top:1px solid #edf0f2;border-bottom:1px solid #edf0f2;overflow:hidden}
     .media img{display:block;width:100%;height:auto}
     .media video{display:block;width:100%;height:auto;max-height:70vh;background:#000}
+    .media-link{display:block;color:inherit;text-decoration:none}
     .media-empty{padding:42px 14px;color:#65676b;text-align:center}
+    .carousel{position:relative;overflow:hidden;background:#eef1f4}
+    .carousel-track{display:flex;transition:transform .22s ease}
+    .carousel-slide{min-width:100%;display:grid;place-items:center;background:#f7f8fa}
+    .carousel-slide img,.carousel-slide video{max-height:70vh;object-fit:contain}
+    .carousel-nav{position:absolute;top:50%;width:34px;height:44px;border:0;border-radius:6px;background:rgba(255,255,255,.92);color:#172026;font-size:30px;line-height:1;transform:translateY(-50%);box-shadow:0 4px 16px rgba(0,0,0,.18)}
+    .carousel-prev{left:8px}
+    .carousel-next{right:8px}
+    .carousel-counter{position:absolute;right:10px;bottom:10px;border-radius:999px;background:rgba(0,0,0,.66);color:#fff;font-size:12px;font-weight:700;padding:4px 8px}
     .footer{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 12px;background:#f7f8fa}
     .domain{min-width:0;color:#65676b;font-size:12px;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .button{border:0;border-radius:6px;background:#e4e6eb;color:#050505;font-weight:700;font-size:13px;padding:8px 12px;white-space:nowrap}
@@ -301,15 +450,13 @@ function previewSrcDoc(ad: Ad, media: PreviewMedia | null) {
       <div class="brand"><strong>${escapeHtml(companyName)}</strong><span>Реклама</span></div>
     </header>
     <section class="text">${title ? `<div class="title">${escapeHtml(title)}</div>` : ''}${escapeHtml(body)}</section>
-    <section class="media">${renderPreviewMedia(media)}</section>
+    <section class="media">${renderPreviewMedia(mediaItems)}</section>
     <footer class="footer"><div class="domain">facebook.com</div>${cta ? `<div class="button">${escapeHtml(cta)}</div>` : ''}</footer>
-  </article></div></body></html>`;
+  </article></div>${renderCarouselScript(hasCarousel)}</body></html>`;
 }
 
 function directAdUrl(ad: Ad) {
-  return ad.facebook_library_id
-    ? `https://www.facebook.com/ads/library/?id=${encodeURIComponent(ad.facebook_library_id)}`
-    : ad.source_url;
+  return ad.source_url || `https://www.facebook.com/ads/library/?id=${encodeURIComponent(ad.facebook_library_id)}`;
 }
 
 function parseRuDate(value: string | null) {
@@ -487,6 +634,7 @@ export function App() {
   const [geoAd, setGeoAd] = useState<Ad | null>(null);
   const [filters, setFilters] = useState<Filters>({ competitorId: '', status: '', platform: '', q: '' });
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
+  const [collectCarousels, setCollectCarousels] = useState(true);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
   const [runs, setRuns] = useState<Awaited<ReturnType<typeof fetchRuns>> | null>(null);
   const [scraperLog, setScraperLog] = useState<string[]>([]);
@@ -545,7 +693,7 @@ export function App() {
   async function handleStartScrape(competitorId?: string) {
     setError(null);
     try {
-      const nextJob = await startScrape({ competitorId: competitorId || undefined });
+      const nextJob = await startScrape({ competitorId: competitorId || undefined, collectCarousels });
       setJob(nextJob);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
@@ -605,6 +753,14 @@ export function App() {
             <Settings size={18} />
             Конкуренты
           </button>
+          <label className="topbar-toggle">
+            <input
+              type="checkbox"
+              checked={collectCarousels}
+              onChange={(event) => setCollectCarousels(event.target.checked)}
+            />
+            <span>Карусели</span>
+          </label>
           <button className="primary-button" onClick={() => void handleStartScrape()}>
             <Play size={18} />
             Собрать включенных
@@ -896,16 +1052,17 @@ function CompetitorsDialog({
 }
 
 function PreviewThumb({ ad, onOpen }: { ad: Ad; onOpen: () => void }) {
-  const media = usePreviewMedia(ad.preview_html);
-  const imageUrl = media?.type === 'video' ? media.poster : media?.src;
-  const aspectRatio = useMediaAspectRatio(imageUrl ?? (media?.type === 'video' ? media.src : null));
+  const mediaItems = usePreviewMediaItems(ad);
+  const primary = mediaItems[0] ?? null;
+  const imageUrl = primary?.type === 'video' ? primary.poster : primary?.src;
+  const aspectRatio = useMediaAspectRatio(imageUrl ?? (primary?.type === 'video' ? primary.src : null));
   const style = aspectRatio
     ? ({ '--preview-aspect-ratio': aspectRatio.toString() } as CSSProperties)
     : undefined;
 
   return (
     <button
-      className={`preview-thumb ${media?.type === 'video' ? 'video-thumb' : ''}`}
+      className={`preview-thumb ${primary?.type === 'video' ? 'video-thumb' : ''}`}
       style={style}
       onClick={onOpen}
       title="Открыть превью"
@@ -913,19 +1070,20 @@ function PreviewThumb({ ad, onOpen }: { ad: Ad; onOpen: () => void }) {
       {imageUrl ? (
         <img src={imageUrl} alt="" referrerPolicy="origin-when-cross-origin" loading="lazy" />
       ) : (
-        <span className="preview-placeholder">{media?.type === 'video' ? 'video' : 'нет картинки'}</span>
+        <span className="preview-placeholder">{primary?.type === 'video' ? 'video' : 'нет картинки'}</span>
       )}
-      {media?.type === 'video' && (
+      {primary?.type === 'video' && (
         <span className="play-badge" aria-hidden="true">
           <Play size={18} fill="currentColor" />
         </span>
       )}
+      {mediaItems.length > 1 && <span className="carousel-badge">{mediaItems.length}</span>}
     </button>
   );
 }
 
 function PreviewModal({ ad, onClose }: { ad: Ad; onClose: () => void }) {
-  const media = usePreviewMedia(ad.preview_html);
+  const mediaItems = usePreviewMediaItems(ad);
 
   return (
     <div className="modal-backdrop preview-backdrop">
@@ -942,9 +1100,9 @@ function PreviewModal({ ad, onClose }: { ad: Ad; onClose: () => void }) {
         <iframe
           title={`Ad preview ${ad.facebook_library_id}`}
           className="preview-frame"
-          srcDoc={previewSrcDoc(ad, media)}
+          srcDoc={previewSrcDoc(ad, mediaItems)}
           allow="fullscreen; autoplay"
-          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         />
       </section>
     </div>

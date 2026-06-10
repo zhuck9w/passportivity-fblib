@@ -1,6 +1,5 @@
 import type { Locator, Page } from 'playwright';
-import { buildAdArchiveIdUrl } from '../../shared/adLibraryUrl';
-import type { ScrapedAdInput, ScrapedLocationInput } from '../../shared/types';
+import type { AdMediaItem, ScrapedAdInput, ScrapedLocationInput } from '../../shared/types';
 import type { SelectorConfig } from './selectors';
 
 export type CardSnapshot = {
@@ -15,6 +14,31 @@ export type CardSnapshot = {
   raw_text: string;
   has_multiple_versions: boolean;
 };
+
+type ExtractAdOptions = {
+  collectCarousels?: boolean;
+  mediaItems?: AdMediaItem[];
+  previewHtml?: string | null;
+};
+
+export type CardMediaSnapshot = {
+  html: string | null;
+  media_items: AdMediaItem[];
+};
+
+function isLocator(root: Page | Locator): root is Locator {
+  return typeof (root as Locator).page === 'function';
+}
+
+function pageFromRoot(root: Page | Locator): Page {
+  return isLocator(root) ? root.page() : root;
+}
+
+async function ensureEvaluateHelpers(root: Page | Locator) {
+  await pageFromRoot(root)
+    .evaluate('globalThis.__name = globalThis.__name || ((target) => target)')
+    .catch(() => undefined);
+}
 
 const pageChromePatterns = [
   /^Информация$/,
@@ -248,7 +272,148 @@ async function extractLocations(page: Page, config: SelectorConfig): Promise<Scr
   return locations;
 }
 
-async function resolvePreview(root: Page | Locator, config: SelectorConfig, fallback: CardSnapshot) {
+async function revealCarouselSlides(container: Locator) {
+  const children = container.locator('[data-type="hscroll-child"]');
+  const count = await children.count().catch(() => 0);
+  if (count <= 1) return;
+
+  for (let index = 0; index < count; index += 1) {
+    const child = children.nth(index);
+    await child
+      .evaluate((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        const findHorizontalScroller = (element: HTMLElement) => {
+          let current: HTMLElement | null = element.parentElement;
+          while (current) {
+            if (current.scrollWidth > current.clientWidth + 4) return current;
+            current = current.parentElement;
+          }
+          return null;
+        };
+        const scroller = findHorizontalScroller(node);
+        if (scroller) {
+          const left = node.offsetLeft - (scroller.clientWidth - node.clientWidth) / 2;
+          scroller.scrollTo({ left: Math.max(0, left), behavior: 'auto' });
+        }
+        node.scrollIntoView({ block: 'nearest', inline: 'center' });
+      })
+      .catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+}
+
+async function extractPreviewMediaItems(container: Locator, collectCarousels: boolean): Promise<AdMediaItem[]> {
+  await ensureEvaluateHelpers(container);
+
+  if (collectCarousels) {
+    await revealCarouselSlides(container);
+  }
+
+  const items = await container
+    .evaluate((node, shouldCollectCarousels) => {
+      if (!(node instanceof HTMLElement)) return [];
+
+      type BrowserMediaItem = AdMediaItem & { score: number };
+
+      const isUsableSrc = (src: string | null | undefined) => Boolean(src && !src.startsWith('data:') && !src.startsWith('blob:'));
+      const srcFromImage = (image: HTMLImageElement) => image.currentSrc || image.src || image.getAttribute('src') || '';
+      const srcFromVideo = (video: HTMLVideoElement) =>
+        video.currentSrc || video.src || video.querySelector<HTMLSourceElement>('source[src]')?.src || '';
+      const linkFromElement = (element: Element) => element.querySelector<HTMLAnchorElement>('a[href]')?.href ?? null;
+      const imageScore = (image: HTMLImageElement, index: number, total: number) => {
+        const src = srcFromImage(image).toLowerCase();
+        const sizeMatch = src.match(/[sp](\d{2,4})x(\d{2,4})/);
+        const width = sizeMatch ? Number(sizeMatch[1]) : image.naturalWidth || image.width || 0;
+        const height = sizeMatch ? Number(sizeMatch[2]) : image.naturalHeight || image.height || 0;
+        let score = index + total;
+
+        if (image.closest('a[href]')) score += 35;
+        if (src.includes('t39.35426')) score += 80;
+        if (src.includes('dst-jpg')) score += 35;
+        if (src.includes('s600x600') || src.includes('s1080x1080')) score += 40;
+        if (width && height) score += Math.min(width * height, 1_200_000) / 10_000;
+        if (width <= 120 && height <= 120 && width && height) score -= 100;
+        if (src.includes('profile') || src.includes('logo') || src.includes('p64x64') || src.includes('s64x64')) {
+          score -= 80;
+        }
+
+        return score;
+      };
+      const mediaFromScope = (scope: HTMLElement, source: 'preview' | 'carousel', position: number): BrowserMediaItem | null => {
+        const video = Array.from(scope.querySelectorAll<HTMLVideoElement>('video')).find((candidate) =>
+          isUsableSrc(srcFromVideo(candidate))
+        );
+        if (video) {
+          return {
+            type: 'video',
+            src: srcFromVideo(video),
+            poster: video.poster || null,
+            link_url: linkFromElement(scope),
+            source,
+            position,
+            score: 1_000
+          };
+        }
+
+        const images = Array.from(scope.querySelectorAll<HTMLImageElement>('img'))
+          .map((image, index, all) => ({ image, score: imageScore(image, index, all.length) }))
+          .filter((candidate) => isUsableSrc(srcFromImage(candidate.image)))
+          .sort((left, right) => right.score - left.score);
+        const best = images[0];
+        if (!best) return null;
+
+        return {
+          type: 'image',
+          src: srcFromImage(best.image),
+          poster: null,
+          link_url: linkFromElement(scope),
+          source,
+          position,
+          score: best.score
+        };
+      };
+
+      const carouselChildren = shouldCollectCarousels
+        ? Array.from(node.querySelectorAll<HTMLElement>('[data-type="hscroll-child"]'))
+        : [];
+      const scopes = carouselChildren.length > 1 ? carouselChildren : [node];
+      const source = carouselChildren.length > 1 ? 'carousel' : 'preview';
+      const seen = new Set<string>();
+
+      return scopes
+        .map((scope, index) => mediaFromScope(scope, source, index))
+        .filter((item): item is BrowserMediaItem => Boolean(item))
+        .filter((item) => {
+          if (seen.has(item.src)) return false;
+          seen.add(item.src);
+          return true;
+        })
+        .map(({ score: _score, ...item }, index) => ({ ...item, position: index }));
+    }, collectCarousels)
+    .catch((error) => {
+      throw new Error(`Failed to extract preview media: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+  return items;
+}
+
+export async function extractCardMediaSnapshot(
+  card: Locator,
+  collectCarousels = true
+): Promise<CardMediaSnapshot> {
+  const mediaItems = await extractPreviewMediaItems(card, collectCarousels);
+  const html = await card.evaluate((node) => (node instanceof HTMLElement ? node.outerHTML : null)).catch(() => null);
+  return { html, media_items: mediaItems };
+}
+
+async function resolvePreview(
+  root: Page | Locator,
+  config: SelectorConfig,
+  fallback: CardSnapshot,
+  options: ExtractAdOptions = {}
+) {
+  await ensureEvaluateHelpers(root);
+
   await root
     .locator(config.detail.previewContainer)
     .first()
@@ -257,7 +422,13 @@ async function resolvePreview(root: Page | Locator, config: SelectorConfig, fall
 
   const containers = root.locator(config.detail.previewContainer);
   const count = await containers.count().catch(() => 0);
-  let best: { html: string | null; text: string | null; score: number } = { html: null, text: null, score: -1 };
+  let best: { container: Locator | null; html: string | null; text: string | null; score: number; media_items: AdMediaItem[] } = {
+    container: null,
+    html: null,
+    text: null,
+    score: -1,
+    media_items: []
+  };
 
   for (let index = 0; index < count; index += 1) {
     const container = containers.nth(index);
@@ -323,14 +494,20 @@ async function resolvePreview(root: Page | Locator, config: SelectorConfig, fall
     if (text.includes('Библиотека рекламы') || text.includes('Результаты:')) score -= 6;
     if (creativeText.trim().length > 20) score += 1;
 
-    if (score > best.score) best = { html, text: creativeText, score };
+    if (score > best.score) best = { container, html, text: creativeText, score, media_items: [] };
   }
 
   if ((fallback.title || fallback.body_text) && best.score < 1) {
-    return { html: null, text: null, score: best.score };
+    return { html: null, text: null, score: best.score, media_items: [] };
   }
 
-  return best;
+  if (best.container) {
+    const mediaItems = await extractPreviewMediaItems(best.container, options.collectCarousels ?? true);
+    const html = await best.container.evaluate((node) => (node instanceof HTMLElement ? node.outerHTML : null)).catch(() => best.html);
+    return { html, text: best.text, score: best.score, media_items: mediaItems };
+  }
+
+  return { html: best.html, text: best.text, score: best.score, media_items: [] };
 }
 
 export async function extractDetailAd(
@@ -338,20 +515,22 @@ export async function extractDetailAd(
   config: SelectorConfig,
   competitorId: string,
   sourceUrl: string,
-  fallback: CardSnapshot
+  fallback: CardSnapshot,
+  options: ExtractAdOptions = {}
 ): Promise<ScrapedAdInput> {
-  const preview = await resolvePreview(page, config, fallback);
+  const preview = await resolvePreview(page, config, fallback, options);
   const facebookLibraryId =
     fallback.facebook_library_id ?? matchRegex(preview.text || '', config.results.libraryIdRegex)?.[1] ?? 'unknown';
   const creative = preferCleanCreative(preview.text, fallback, config);
   const bodyText = creative.body_text ?? fallback.body_text;
   const title = creative.title ?? fallback.title;
   const cta = creative.cta ?? fallback.cta;
+  const mediaItems = options.mediaItems?.length ? options.mediaItems : preview.media_items;
 
   return {
     competitor_id: competitorId,
     facebook_library_id: facebookLibraryId,
-    source_url: facebookLibraryId === 'unknown' ? sourceUrl : buildAdArchiveIdUrl(facebookLibraryId),
+    source_url: sourceUrl,
     status: fallback.status,
     start_date_text: fallback.start_date_text,
     end_date_text: fallback.end_date_text,
@@ -359,8 +538,9 @@ export async function extractDetailAd(
     title,
     body_text: bodyText,
     cta,
-    preview_html: preview.html,
+    preview_html: options.previewHtml ?? preview.html,
     preview_text: preview.text,
+    media_items: mediaItems,
     dedupe_key: facebookLibraryId,
     locations: await extractLocations(page, config)
   };
@@ -371,20 +551,22 @@ export async function extractCardFallbackAd(
   config: SelectorConfig,
   competitorId: string,
   sourceUrl: string,
-  fallback: CardSnapshot
+  fallback: CardSnapshot,
+  options: ExtractAdOptions = {}
 ): Promise<ScrapedAdInput> {
-  const preview = await resolvePreview(card, config, fallback);
+  const preview = await resolvePreview(card, config, fallback, options);
   const fallbackHtml = await card.evaluate((node) => (node instanceof HTMLElement ? node.outerHTML : null)).catch(() => null);
   const fallbackText = await card.innerText({ timeout: 3000 }).catch(() => fallback.raw_text);
   const previewHtml = preview.html ?? fallbackHtml;
   const previewText = preview.text ?? fallbackText;
   const facebookLibraryId = fallback.facebook_library_id ?? 'unknown';
   const creative = preferCleanCreative(previewText, fallback, config);
+  const mediaItems = options.mediaItems?.length ? options.mediaItems : preview.media_items;
 
   return {
     competitor_id: competitorId,
     facebook_library_id: facebookLibraryId,
-    source_url: facebookLibraryId === 'unknown' ? sourceUrl : buildAdArchiveIdUrl(facebookLibraryId),
+    source_url: sourceUrl,
     status: fallback.status,
     start_date_text: fallback.start_date_text,
     end_date_text: fallback.end_date_text,
@@ -392,8 +574,9 @@ export async function extractCardFallbackAd(
     title: creative.title ?? fallback.title,
     body_text: creative.body_text ?? fallback.body_text,
     cta: creative.cta ?? fallback.cta,
-    preview_html: previewHtml,
+    preview_html: options.previewHtml ?? previewHtml,
     preview_text: previewText,
+    media_items: mediaItems,
     dedupe_key: facebookLibraryId,
     locations: []
   };

@@ -170,6 +170,7 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         source_url: input.source_url,
         preview_html: input.preview_html ?? existing.preview_html,
         preview_text: input.preview_text ?? existing.preview_text,
+        media_items: input.media_items ?? existing.media_items ?? [],
         last_seen_at: now,
         updated_at: now
       })
@@ -194,6 +195,7 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         cta: input.cta ?? null,
         preview_html: input.preview_html ?? null,
         preview_text: input.preview_text ?? null,
+        media_items: input.media_items ?? [],
         dedupe_key: input.facebook_library_id,
         duplicate_count: 1
       })
@@ -218,6 +220,7 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         cta: input.cta ?? null,
         preview_html: input.preview_html ?? null,
         preview_text: input.preview_text ?? null,
+        media_items: input.media_items ?? [],
         dedupe_key: input.facebook_library_id,
         source_url: input.source_url,
         seen_at: now,
