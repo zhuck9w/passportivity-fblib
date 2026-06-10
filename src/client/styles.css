@@ -352,8 +352,7 @@ select,
   box-shadow: inset -2px 0 0 #1769e0;
 }
 
-.column-boundary-active .column-resize-handle::after,
-.column-resize-handle:hover::after {
+.column-boundary-active .column-resize-handle::after {
   background: #1769e0;
 }
 
@@ -370,18 +369,19 @@ select,
 }
 
 .ad-table tbody tr {
-  height: var(--row-height, 116px);
+  position: relative;
+  height: var(--row-height, 138px);
 }
 
 .ad-table tbody td {
   position: relative;
-  height: var(--row-height, 116px);
+  height: var(--row-height, 138px);
   padding: 0;
   overflow: hidden;
 }
 
 .cell-content {
-  height: var(--row-height, 116px);
+  height: var(--row-height, 138px);
   padding: 10px 12px;
   overflow: hidden;
 }
@@ -400,6 +400,7 @@ select,
 
 .row-resize-handle::after {
   content: "";
+  display: none;
   position: absolute;
   left: 8px;
   right: 8px;
@@ -409,16 +410,15 @@ select,
   background: transparent;
 }
 
-.ad-table tbody tr.row-boundary-active td {
-  box-shadow: inset 0 -2px 0 #1769e0;
-}
-
-.ad-table tbody tr.row-boundary-active td.column-boundary-active {
-  box-shadow: inset -2px 0 0 #1769e0, inset 0 -2px 0 #1769e0;
-}
-
-.row-boundary-active .row-resize-handle::after,
-.row-resize-handle:hover::after {
+.ad-table tbody tr.row-boundary-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  height: 2px;
+  pointer-events: none;
   background: #1769e0;
 }
 

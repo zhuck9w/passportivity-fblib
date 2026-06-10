@@ -22,6 +22,7 @@ import {
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from 'react';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
@@ -60,7 +61,12 @@ type TableLayout = {
 };
 
 const tableLayoutStorageKey = 'ad-library-table-layout-v2';
-const defaultRowHeight = 116;
+const previewThumbWidth = 108;
+const tableCellVerticalPadding = 20;
+const defaultRowBottomGap = 10;
+const resizeHoverDelayMs = 500;
+const defaultPreviewAspectRatio = 1;
+const defaultRowHeight = previewThumbWidth + tableCellVerticalPadding + defaultRowBottomGap;
 const minRowHeight = 54;
 const maxRowHeight = 520;
 
@@ -343,6 +349,37 @@ function extractPreviewVideo(html: string | null): PreviewMediaItem | null {
     source: 'preview',
     position: 0
   };
+}
+
+function mediaAspectRatioFromSrc(src: string | null | undefined) {
+  if (!src) return null;
+  const matches = Array.from(src.toLowerCase().matchAll(/[sp](\d{2,4})x(\d{2,4})/g))
+    .map((match) => ({ width: Number(match[1]), height: Number(match[2]) }))
+    .filter(({ width, height }) => width > 0 && height > 0)
+    .sort((left, right) => right.width * right.height - left.width * left.height);
+  const best = matches[0];
+  return best ? best.width / best.height : null;
+}
+
+function primaryPreviewMediaSrc(ad: Ad) {
+  const storedItems = normalizeStoredMediaItems(ad.media_items);
+  const carouselItems = extractCarouselMediaItems(ad.preview_html);
+  const video = extractPreviewVideo(ad.preview_html);
+  const fallbackImage = extractPreviewImageCandidates(ad.preview_html)[0]?.src ?? null;
+  const primary = storedItems[0] ?? (carouselItems.length > 1 ? carouselItems[0] : video);
+
+  if (primary?.type === 'video') return primary.poster || primary.src;
+  return primary?.src ?? fallbackImage;
+}
+
+function defaultRowHeightForAspectRatio(aspectRatio: number | null | undefined) {
+  const safeAspectRatio = clampNumber(aspectRatio || defaultPreviewAspectRatio, 0.2, 4);
+  const mediaHeight = previewThumbWidth / safeAspectRatio;
+  return clampNumber(Math.ceil(mediaHeight + tableCellVerticalPadding + defaultRowBottomGap), minRowHeight, maxRowHeight);
+}
+
+function defaultRowHeightForAd(ad: Ad, measuredAspectRatio: number | null | undefined) {
+  return defaultRowHeightForAspectRatio(measuredAspectRatio ?? mediaAspectRatioFromSrc(primaryPreviewMediaSrc(ad)));
 }
 
 function useBestPreviewImage(html: string | null) {
@@ -732,6 +769,9 @@ export function App() {
   const [activeColumnKey, setActiveColumnKey] = useState<string | null>(null);
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [previewAspectRatios, setPreviewAspectRatios] = useState<Record<string, number>>({});
+  const columnHoverTimer = useRef<number | null>(null);
+  const rowHoverTimer = useRef<number | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
   const [runs, setRuns] = useState<Awaited<ReturnType<typeof fetchRuns>> | null>(null);
   const [scraperLog, setScraperLog] = useState<string[]>([]);
@@ -771,6 +811,14 @@ export function App() {
   useEffect(() => {
     saveTableLayout(tableLayout);
   }, [tableLayout]);
+
+  useEffect(
+    () => () => {
+      clearColumnHoverTimer();
+      clearRowHoverTimer();
+    },
+    []
+  );
 
   useEffect(() => {
     if (!job || job.status !== 'running') return undefined;
@@ -829,12 +877,49 @@ export function App() {
     }
   }
 
+  function clearColumnHoverTimer() {
+    if (columnHoverTimer.current === null) return;
+    window.clearTimeout(columnHoverTimer.current);
+    columnHoverTimer.current = null;
+  }
+
+  function clearRowHoverTimer() {
+    if (rowHoverTimer.current === null) return;
+    window.clearTimeout(rowHoverTimer.current);
+    rowHoverTimer.current = null;
+  }
+
+  function scheduleColumnHover(columnKey: string) {
+    clearColumnHoverTimer();
+    columnHoverTimer.current = window.setTimeout(() => {
+      setHoveredColumnKey(columnKey);
+      columnHoverTimer.current = null;
+    }, resizeHoverDelayMs);
+  }
+
+  function scheduleRowHover(rowId: string) {
+    clearRowHoverTimer();
+    rowHoverTimer.current = window.setTimeout(() => {
+      setHoveredRowId(rowId);
+      rowHoverTimer.current = null;
+    }, resizeHoverDelayMs);
+  }
+
+  function rememberPreviewAspectRatio(adId: string, aspectRatio: number | null) {
+    if (!aspectRatio || !Number.isFinite(aspectRatio)) return;
+    setPreviewAspectRatios((current) => {
+      if (Math.abs((current[adId] ?? 0) - aspectRatio) < 0.001) return current;
+      return { ...current, [adId]: aspectRatio };
+    });
+  }
+
   function handleColumnResizeStart(event: ReactMouseEvent, column: TableColumn) {
     event.preventDefault();
     event.stopPropagation();
 
     const startX = event.clientX;
     const startWidth = tableLayout.columnWidths[column.key] ?? column.width;
+    clearColumnHoverTimer();
     setActiveColumnKey(column.key);
     setHoveredColumnKey(column.key);
 
@@ -867,7 +952,8 @@ export function App() {
     event.stopPropagation();
 
     const startY = event.clientY;
-    const startHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeight;
+    const startHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
+    clearRowHoverTimer();
     setActiveRowId(ad.id);
     setHoveredRowId(ad.id);
 
@@ -926,10 +1012,11 @@ export function App() {
         role="separator"
         aria-orientation="vertical"
         tabIndex={0}
-        onMouseEnter={() => setHoveredColumnKey(column.key)}
-        onMouseLeave={() =>
+        onMouseEnter={() => scheduleColumnHover(column.key)}
+        onMouseLeave={() => {
+          clearColumnHoverTimer();
           setHoveredColumnKey((current) => (current === column.key && activeColumnKey !== column.key ? null : current))
-        }
+        }}
         onMouseDown={(event) => handleColumnResizeStart(event, column)}
       />
     );
@@ -942,8 +1029,11 @@ export function App() {
         role="separator"
         aria-orientation="horizontal"
         tabIndex={0}
-        onMouseEnter={() => setHoveredRowId(ad.id)}
-        onMouseLeave={() => setHoveredRowId((current) => (current === ad.id && activeRowId !== ad.id ? null : current))}
+        onMouseEnter={() => scheduleRowHover(ad.id)}
+        onMouseLeave={() => {
+          clearRowHoverTimer();
+          setHoveredRowId((current) => (current === ad.id && activeRowId !== ad.id ? null : current));
+        }}
         onMouseDown={(event) => handleRowResizeStart(event, ad)}
       />
     );
@@ -1062,7 +1152,7 @@ export function App() {
             </thead>
             <tbody>
               {ads.map((ad) => {
-                const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeight;
+                const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
                 const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
 
                 return (
@@ -1079,7 +1169,11 @@ export function App() {
                     </td>
                     <td className={columnBoundaryClass('preview')}>
                       <div className="cell-content">
-                        <PreviewThumb ad={ad} onOpen={() => void openPreview(ad)} />
+                        <PreviewThumb
+                          ad={ad}
+                          onOpen={() => void openPreview(ad)}
+                          onAspectRatio={(aspectRatio) => rememberPreviewAspectRatio(ad.id, aspectRatio)}
+                        />
                       </div>
                       {renderColumnResizeHandle(tableColumnByKey.preview)}
                       {renderRowResizeHandle(ad)}
@@ -1318,7 +1412,15 @@ function CompetitorsDialog({
   );
 }
 
-function PreviewThumb({ ad, onOpen }: { ad: Ad; onOpen: () => void }) {
+function PreviewThumb({
+  ad,
+  onOpen,
+  onAspectRatio
+}: {
+  ad: Ad;
+  onOpen: () => void;
+  onAspectRatio?: (aspectRatio: number) => void;
+}) {
   const mediaItems = usePreviewMediaItems(ad);
   const primary = mediaItems[0] ?? null;
   const imageUrl = primary?.type === 'video' ? primary.poster : primary?.src;
@@ -1326,6 +1428,10 @@ function PreviewThumb({ ad, onOpen }: { ad: Ad; onOpen: () => void }) {
   const style = aspectRatio
     ? ({ '--preview-aspect-ratio': aspectRatio.toString() } as CSSProperties)
     : undefined;
+
+  useEffect(() => {
+    if (aspectRatio) onAspectRatio?.(aspectRatio);
+  }, [aspectRatio]);
 
   return (
     <button
