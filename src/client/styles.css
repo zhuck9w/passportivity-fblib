@@ -293,8 +293,6 @@ select,
 }
 
 .ad-table {
-  width: 100%;
-  min-width: 1780px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -304,7 +302,6 @@ select,
 .ad-table td {
   border-bottom: 1px solid #e6ecef;
   border-right: 1px solid #edf1f3;
-  padding: 10px 12px;
   vertical-align: top;
   text-align: left;
   font-size: 13px;
@@ -314,81 +311,129 @@ select,
   position: sticky;
   top: 0;
   z-index: 1;
+  padding: 10px 12px;
   background: #edf2f5;
   color: #44525c;
   font-weight: 700;
   white-space: nowrap;
 }
 
+.column-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 4;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.column-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  right: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.ad-table th.column-boundary-active,
+.ad-table td.column-boundary-active {
+  box-shadow: inset -2px 0 0 #1769e0;
+}
+
+.column-boundary-active .column-resize-handle::after,
+.column-resize-handle:hover::after {
+  background: #1769e0;
+}
+
+.table-column-resizing,
+.table-column-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.table-row-resizing,
+.table-row-resizing * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+
+.ad-table tbody tr {
+  height: var(--row-height, 116px);
+}
+
+.ad-table tbody td {
+  position: relative;
+  height: var(--row-height, 116px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.cell-content {
+  height: var(--row-height, 116px);
+  padding: 10px 12px;
+  overflow: hidden;
+}
+
+.row-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  height: 8px;
+  display: block;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.row-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.ad-table tbody tr.row-boundary-active td {
+  box-shadow: inset 0 -2px 0 #1769e0;
+}
+
+.ad-table tbody tr.row-boundary-active td.column-boundary-active {
+  box-shadow: inset -2px 0 0 #1769e0, inset 0 -2px 0 #1769e0;
+}
+
+.row-boundary-active .row-resize-handle::after,
+.row-resize-handle:hover::after {
+  background: #1769e0;
+}
+
 .ad-table th:nth-child(1),
-.ad-table td:nth-child(1) {
-  width: 125px;
-}
-
-.ad-table th:nth-child(2),
-.ad-table td:nth-child(2) {
-  width: 170px;
-}
-
-.ad-table th:nth-child(3),
-.ad-table td:nth-child(3) {
-  width: 138px;
-}
-
-.ad-table th:nth-child(4),
-.ad-table td:nth-child(4) {
-  width: 110px;
-}
-
-.ad-table th:nth-child(8),
-.ad-table td:nth-child(8) {
-  width: 90px;
-}
-
-.ad-table th:nth-child(5),
-.ad-table td:nth-child(5) {
-  width: 110px;
-}
-
 .ad-table th:nth-child(6),
-.ad-table td:nth-child(6),
 .ad-table th:nth-child(7),
-.ad-table td:nth-child(7) {
-  width: 120px;
-}
-
-.ad-table th:nth-child(9),
-.ad-table td:nth-child(9) {
-  width: 110px;
-}
-
-.ad-table th:nth-child(10),
-.ad-table td:nth-child(10) {
-  width: 470px;
-}
-
-.ad-table th:nth-child(11),
-.ad-table td:nth-child(11) {
-  width: 170px;
-}
-
-.ad-table th:nth-child(12),
-.ad-table td:nth-child(12) {
-  width: 150px;
-}
-
-.ad-table th:nth-child(1),
-.ad-table td:nth-child(1),
-.ad-table th:nth-child(6),
-.ad-table td:nth-child(6),
-.ad-table th:nth-child(7),
-.ad-table td:nth-child(7),
 .ad-table th:nth-child(8),
-.ad-table td:nth-child(8),
 .ad-table th:nth-child(9),
-.ad-table td:nth-child(9),
 .ad-table th:nth-child(12),
-.ad-table td:nth-child(12) {
+.ad-table td:nth-child(1) .cell-content,
+.ad-table td:nth-child(6) .cell-content,
+.ad-table td:nth-child(7) .cell-content,
+.ad-table td:nth-child(8) .cell-content,
+.ad-table td:nth-child(9) .cell-content,
+.ad-table td:nth-child(12) .cell-content {
   padding-left: 8px;
   padding-right: 8px;
 }
@@ -409,7 +454,6 @@ select,
 .body-cell {
   white-space: pre-wrap;
   line-height: 1.42;
-  max-height: 172px;
   overflow: auto;
 }
 

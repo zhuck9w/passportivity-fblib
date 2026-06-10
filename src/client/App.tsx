@@ -15,7 +15,15 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import {
+  type CSSProperties,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
   createCompetitor,
@@ -37,6 +45,90 @@ type Filters = {
   platform: string;
   q: string;
 };
+
+type TableColumn = {
+  key: string;
+  label: string;
+  width: number;
+  minWidth: number;
+  maxWidth: number;
+};
+
+type TableLayout = {
+  columnWidths: Record<string, number>;
+  rowHeights: Record<string, number>;
+};
+
+const tableLayoutStorageKey = 'ad-library-table-layout-v2';
+const defaultRowHeight = 116;
+const minRowHeight = 54;
+const maxRowHeight = 520;
+
+const tableColumns: TableColumn[] = [
+  { key: 'ad_archive_id', label: 'ad_archive_id', width: 125, minWidth: 96, maxWidth: 260 },
+  { key: 'company_name', label: 'company_name', width: 170, minWidth: 120, maxWidth: 360 },
+  { key: 'preview', label: 'preview', width: 138, minWidth: 96, maxWidth: 320 },
+  { key: 'status', label: 'status', width: 110, minWidth: 86, maxWidth: 180 },
+  { key: 'link_url', label: 'link_url', width: 110, minWidth: 86, maxWidth: 220 },
+  { key: 'start_day', label: 'start_day', width: 120, minWidth: 96, maxWidth: 240 },
+  { key: 'stop_day', label: 'stop_day', width: 120, minWidth: 96, maxWidth: 240 },
+  { key: 'days_active', label: 'days_active', width: 90, minWidth: 76, maxWidth: 180 },
+  { key: 'cta', label: 'cta', width: 110, minWidth: 90, maxWidth: 260 },
+  { key: 'body_text', label: 'body_text', width: 470, minWidth: 220, maxWidth: 900 },
+  { key: 'geo', label: 'geo', width: 170, minWidth: 120, maxWidth: 360 },
+  { key: 'last_seen_at', label: 'last_seen_at', width: 150, minWidth: 120, maxWidth: 260 }
+];
+
+const tableColumnByKey = Object.fromEntries(tableColumns.map((column) => [column.key, column])) as Record<
+  string,
+  TableColumn
+>;
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function defaultTableLayout(): TableLayout {
+  return {
+    columnWidths: Object.fromEntries(tableColumns.map((column) => [column.key, column.width])),
+    rowHeights: {}
+  };
+}
+
+function loadTableLayout(): TableLayout {
+  const fallback = defaultTableLayout();
+  if (typeof window === 'undefined') return fallback;
+
+  try {
+    const raw = window.localStorage.getItem(tableLayoutStorageKey);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<TableLayout>;
+    const columnWidths = { ...fallback.columnWidths };
+    const rowHeights: Record<string, number> = {};
+
+    for (const column of tableColumns) {
+      const width = parsed.columnWidths?.[column.key];
+      if (Number.isFinite(width)) {
+        columnWidths[column.key] = clampNumber(Number(width), column.minWidth, column.maxWidth);
+      }
+    }
+
+    for (const [rowId, height] of Object.entries(parsed.rowHeights ?? {})) {
+      if (Number.isFinite(height)) {
+        rowHeights[rowId] = clampNumber(Number(height), minRowHeight, maxRowHeight);
+      }
+    }
+
+    return { columnWidths, rowHeights };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveTableLayout(layout: TableLayout) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(tableLayoutStorageKey, JSON.stringify(layout));
+}
 
 const statusLabels: Record<string, string> = {
   active: 'Активно',
@@ -635,6 +727,11 @@ export function App() {
   const [filters, setFilters] = useState<Filters>({ competitorId: '', status: '', platform: '', q: '' });
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
   const [collectCarousels, setCollectCarousels] = useState(true);
+  const [tableLayout, setTableLayout] = useState<TableLayout>(() => loadTableLayout());
+  const [hoveredColumnKey, setHoveredColumnKey] = useState<string | null>(null);
+  const [activeColumnKey, setActiveColumnKey] = useState<string | null>(null);
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
   const [runs, setRuns] = useState<Awaited<ReturnType<typeof fetchRuns>> | null>(null);
   const [scraperLog, setScraperLog] = useState<string[]>([]);
@@ -670,6 +767,10 @@ export function App() {
     const timer = window.setTimeout(() => void refresh(), 350);
     return () => window.clearTimeout(timer);
   }, [filters.q]);
+
+  useEffect(() => {
+    saveTableLayout(tableLayout);
+  }, [tableLayout]);
 
   useEffect(() => {
     if (!job || job.status !== 'running') return undefined;
@@ -728,6 +829,72 @@ export function App() {
     }
   }
 
+  function handleColumnResizeStart(event: ReactMouseEvent, column: TableColumn) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = tableLayout.columnWidths[column.key] ?? column.width;
+    setActiveColumnKey(column.key);
+    setHoveredColumnKey(column.key);
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = clampNumber(startWidth + moveEvent.clientX - startX, column.minWidth, column.maxWidth);
+      setTableLayout((current) => ({
+        ...current,
+        columnWidths: {
+          ...current.columnWidths,
+          [column.key]: nextWidth
+        }
+      }));
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.classList.remove('table-column-resizing');
+      setActiveColumnKey(null);
+      setHoveredColumnKey(null);
+    };
+
+    document.body.classList.add('table-column-resizing');
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }
+
+  function handleRowResizeStart(event: ReactMouseEvent, ad: Ad) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startY = event.clientY;
+    const startHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeight;
+    setActiveRowId(ad.id);
+    setHoveredRowId(ad.id);
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextHeight = clampNumber(startHeight + moveEvent.clientY - startY, minRowHeight, maxRowHeight);
+      setTableLayout((current) => ({
+        ...current,
+        rowHeights: {
+          ...current.rowHeights,
+          [ad.id]: nextHeight
+        }
+      }));
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.classList.remove('table-row-resizing');
+      setActiveRowId(null);
+      setHoveredRowId(null);
+    };
+
+    document.body.classList.add('table-row-resizing');
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }
+
   const counters = useMemo(
     () => ({
       competitors: competitors.length,
@@ -737,6 +904,50 @@ export function App() {
     }),
     [ads, competitors]
   );
+  const tableWidth = useMemo(
+    () => tableColumns.reduce((sum, column) => sum + (tableLayout.columnWidths[column.key] ?? column.width), 0),
+    [tableLayout.columnWidths]
+  );
+  const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
+  const activeResizeRowId = activeRowId ?? hoveredRowId;
+
+  function columnBoundaryClass(columnKey: string) {
+    return activeResizeColumnKey === columnKey ? 'column-boundary-active' : '';
+  }
+
+  function rowBoundaryClass(rowId: string) {
+    return activeResizeRowId === rowId ? 'row-boundary-active' : '';
+  }
+
+  function renderColumnResizeHandle(column: TableColumn) {
+    return (
+      <span
+        className="column-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        tabIndex={0}
+        onMouseEnter={() => setHoveredColumnKey(column.key)}
+        onMouseLeave={() =>
+          setHoveredColumnKey((current) => (current === column.key && activeColumnKey !== column.key ? null : current))
+        }
+        onMouseDown={(event) => handleColumnResizeStart(event, column)}
+      />
+    );
+  }
+
+  function renderRowResizeHandle(ad: Ad) {
+    return (
+      <span
+        className="row-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        tabIndex={0}
+        onMouseEnter={() => setHoveredRowId(ad.id)}
+        onMouseLeave={() => setHoveredRowId((current) => (current === ad.id && activeRowId !== ad.id ? null : current))}
+        onMouseDown={(event) => handleRowResizeStart(event, ad)}
+      />
+    );
+  }
 
   return (
     <main>
@@ -829,54 +1040,110 @@ export function App() {
 
       <section className="table-section">
         <div className="table-shell">
-          <table className="ad-table">
+          <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
+            <colgroup>
+              {tableColumns.map((column) => (
+                <col key={column.key} style={{ width: tableLayout.columnWidths[column.key] ?? column.width }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th>ad_archive_id</th>
-                <th>company_name</th>
-                <th>preview</th>
-                <th>status</th>
-                <th>link_url</th>
-                <th>start_day</th>
-                <th>stop_day</th>
-                <th>days_active</th>
-                <th>cta</th>
-                <th>body_text</th>
-                <th>geo</th>
-                <th>last_seen_at</th>
+                {tableColumns.map((column) => (
+                  <th
+                    key={column.key}
+                    className={columnBoundaryClass(column.key)}
+                    style={{ width: tableLayout.columnWidths[column.key] ?? column.width }}
+                  >
+                    <span className="column-title">{column.label}</span>
+                    {renderColumnResizeHandle(column)}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {ads.map((ad) => (
-                <tr key={ad.id}>
-                  <td className="mono">{ad.facebook_library_id}</td>
-                  <td>{ad.competitors?.name ?? ad.competitor_id}</td>
-                  <td>
-                    <PreviewThumb ad={ad} onOpen={() => void openPreview(ad)} />
-                  </td>
-                  <td>
-                    <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
-                  </td>
-                  <td>
-                    <a className="table-link" href={directAdUrl(ad)} target="_blank" rel="noreferrer">
+              {ads.map((ad) => {
+                const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeight;
+                const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
+
+                return (
+                  <tr key={ad.id} className={`resizable-row ${rowBoundaryClass(ad.id)}`.trim()} style={rowStyle}>
+                    <td className={columnBoundaryClass('ad_archive_id')}>
+                      <div className="cell-content mono">{ad.facebook_library_id}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.ad_archive_id)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('company_name')}>
+                      <div className="cell-content">{ad.competitors?.name ?? ad.competitor_id}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.company_name)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('preview')}>
+                      <div className="cell-content">
+                        <PreviewThumb ad={ad} onOpen={() => void openPreview(ad)} />
+                      </div>
+                      {renderColumnResizeHandle(tableColumnByKey.preview)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('status')}>
+                      <div className="cell-content">
+                        <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
+                      </div>
+                      {renderColumnResizeHandle(tableColumnByKey.status)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('link_url')}>
+                      <div className="cell-content">
+                        <a className="table-link" href={directAdUrl(ad)} target="_blank" rel="noreferrer">
                       ссылка
                       <ExternalLink size={14} />
-                    </a>
-                  </td>
-                  <td>{ad.start_date_text ?? ''}</td>
-                  <td>{stopDay(ad)}</td>
-                  <td className="number-cell">{daysActive(ad)}</td>
-                  <td>{ad.cta ?? ''}</td>
-                  <td className="body-cell">{getAdBodyText(ad)}</td>
-                  <td>
-                    <button className="geo-button" onClick={() => void openGeo(ad)}>
-                      <MapPinned size={15} />
-                      {geoSummary(ad)}
-                    </button>
-                  </td>
-                  <td className="date-cell">{formatDateTime(ad.last_seen_at)}</td>
-                </tr>
-              ))}
+                        </a>
+                      </div>
+                      {renderColumnResizeHandle(tableColumnByKey.link_url)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('start_day')}>
+                      <div className="cell-content">{ad.start_date_text ?? ''}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.start_day)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('stop_day')}>
+                      <div className="cell-content">{stopDay(ad)}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.stop_day)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('days_active')}>
+                      <div className="cell-content number-cell">{daysActive(ad)}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.days_active)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('cta')}>
+                      <div className="cell-content">{ad.cta ?? ''}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.cta)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('body_text')}>
+                      <div className="cell-content body-cell">{getAdBodyText(ad)}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.body_text)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('geo')}>
+                      <div className="cell-content">
+                        <button className="geo-button" onClick={() => void openGeo(ad)}>
+                          <MapPinned size={15} />
+                          {geoSummary(ad)}
+                        </button>
+                      </div>
+                      {renderColumnResizeHandle(tableColumnByKey.geo)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                    <td className={columnBoundaryClass('last_seen_at')}>
+                      <div className="cell-content date-cell">{formatDateTime(ad.last_seen_at)}</div>
+                      {renderColumnResizeHandle(tableColumnByKey.last_seen_at)}
+                      {renderRowResizeHandle(ad)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {!ads.length && <div className="empty">Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.</div>}

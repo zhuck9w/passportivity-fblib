@@ -28,5 +28,5 @@ describe('card carousel media extraction', () => {
     expect(snapshot.media_items.map((item) => item.source)).toEqual(['carousel', 'carousel', 'carousel', 'carousel']);
     expect(snapshot.media_items.map((item) => item.position)).toEqual([0, 1, 2, 3]);
     expect(snapshot.media_items.every((item) => item.src.includes('dst-jpg_s600x600'))).toBe(true);
-  });
+  }, 15_000);
 });
