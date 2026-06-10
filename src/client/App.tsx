@@ -55,6 +55,8 @@ type TableColumn = {
   maxWidth: number;
 };
 
+type ColumnResizeEdge = 'left' | 'right';
+
 type TableLayout = {
   columnWidths: Record<string, number>;
   rowHeights: Record<string, number>;
@@ -64,7 +66,7 @@ const tableLayoutStorageKey = 'ad-library-table-layout-v2';
 const previewThumbWidth = 108;
 const tableCellVerticalPadding = 20;
 const defaultRowBottomGap = 10;
-const resizeHoverDelayMs = 500;
+const resizeHoverDelayMs = 300;
 const defaultPreviewAspectRatio = 1;
 const defaultRowHeight = previewThumbWidth + tableCellVerticalPadding + defaultRowBottomGap;
 const minRowHeight = 54;
@@ -92,6 +94,22 @@ const tableColumnByKey = Object.fromEntries(tableColumns.map((column) => [column
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function columnWidth(layout: TableLayout, column: TableColumn) {
+  return layout.columnWidths[column.key] ?? column.width;
+}
+
+function normalizeTableLayout(layout: TableLayout): TableLayout {
+  return {
+    columnWidths: Object.fromEntries(
+      tableColumns.map((column) => [
+        column.key,
+        clampNumber(layout.columnWidths[column.key] ?? column.width, column.minWidth, column.maxWidth)
+      ])
+    ),
+    rowHeights: layout.rowHeights
+  };
 }
 
 function defaultTableLayout(): TableLayout {
@@ -133,7 +151,7 @@ function loadTableLayout(): TableLayout {
 
 function saveTableLayout(layout: TableLayout) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(tableLayoutStorageKey, JSON.stringify(layout));
+  window.localStorage.setItem(tableLayoutStorageKey, JSON.stringify(normalizeTableLayout(layout)));
 }
 
 const statusLabels: Record<string, string> = {
@@ -766,7 +784,9 @@ export function App() {
   const [collectCarousels, setCollectCarousels] = useState(true);
   const [tableLayout, setTableLayout] = useState<TableLayout>(() => loadTableLayout());
   const [hoveredColumnKey, setHoveredColumnKey] = useState<string | null>(null);
+  const [hoveredColumnEdge, setHoveredColumnEdge] = useState<ColumnResizeEdge>('right');
   const [activeColumnKey, setActiveColumnKey] = useState<string | null>(null);
+  const [activeColumnEdge, setActiveColumnEdge] = useState<ColumnResizeEdge>('right');
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [previewAspectRatios, setPreviewAspectRatios] = useState<Record<string, number>>({});
@@ -889,10 +909,11 @@ export function App() {
     rowHoverTimer.current = null;
   }
 
-  function scheduleColumnHover(columnKey: string) {
+  function scheduleColumnHover(columnKey: string, edge: ColumnResizeEdge) {
     clearColumnHoverTimer();
     columnHoverTimer.current = window.setTimeout(() => {
       setHoveredColumnKey(columnKey);
+      setHoveredColumnEdge(edge);
       columnHoverTimer.current = null;
     }, resizeHoverDelayMs);
   }
@@ -913,23 +934,51 @@ export function App() {
     });
   }
 
-  function handleColumnResizeStart(event: ReactMouseEvent, column: TableColumn) {
+  function handleColumnResizeStart(event: ReactMouseEvent, column: TableColumn, edge: ColumnResizeEdge) {
     event.preventDefault();
     event.stopPropagation();
 
     const startX = event.clientX;
-    const startWidth = tableLayout.columnWidths[column.key] ?? column.width;
+    const startWidth = columnWidth(tableLayout, column);
+    const columnIndex = tableColumns.findIndex((candidate) => candidate.key === column.key);
+    const previousColumn = edge === 'left' ? tableColumns[columnIndex - 1] : null;
+    const startPreviousWidth = previousColumn ? columnWidth(tableLayout, previousColumn) : 0;
+    const pairWidth = startWidth + startPreviousWidth;
     clearColumnHoverTimer();
     setActiveColumnKey(column.key);
+    setActiveColumnEdge(edge);
     setHoveredColumnKey(column.key);
+    setHoveredColumnEdge(edge);
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      const nextWidth = clampNumber(startWidth + moveEvent.clientX - startX, column.minWidth, column.maxWidth);
+      const delta = moveEvent.clientX - startX;
+      const nextWidths: Record<string, number> = {};
+
+      if (edge === 'left' && previousColumn) {
+        let nextWidth = clampNumber(startWidth - delta, column.minWidth, column.maxWidth);
+        let nextPreviousWidth = pairWidth - nextWidth;
+
+        if (nextPreviousWidth < previousColumn.minWidth) {
+          nextPreviousWidth = previousColumn.minWidth;
+          nextWidth = pairWidth - nextPreviousWidth;
+        } else if (nextPreviousWidth > previousColumn.maxWidth) {
+          nextPreviousWidth = previousColumn.maxWidth;
+          nextWidth = pairWidth - nextPreviousWidth;
+        }
+
+        nextWidth = clampNumber(nextWidth, column.minWidth, column.maxWidth);
+        nextPreviousWidth = pairWidth - nextWidth;
+        nextWidths[column.key] = nextWidth;
+        nextWidths[previousColumn.key] = nextPreviousWidth;
+      } else {
+        nextWidths[column.key] = clampNumber(startWidth + delta, column.minWidth, column.maxWidth);
+      }
+
       setTableLayout((current) => ({
         ...current,
         columnWidths: {
           ...current.columnWidths,
-          [column.key]: nextWidth
+          ...nextWidths
         }
       }));
     };
@@ -991,35 +1040,58 @@ export function App() {
     [ads, competitors]
   );
   const tableWidth = useMemo(
-    () => tableColumns.reduce((sum, column) => sum + (tableLayout.columnWidths[column.key] ?? column.width), 0),
+    () => tableColumns.reduce((sum, column) => sum + columnWidth(tableLayout, column), 0),
     [tableLayout.columnWidths]
   );
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
+  const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
 
   function columnBoundaryClass(columnKey: string) {
-    return activeResizeColumnKey === columnKey ? 'column-boundary-active' : '';
+    if (activeResizeColumnKey !== columnKey) return '';
+    return activeResizeColumnEdge === 'left' ? 'column-boundary-left-active' : 'column-boundary-right-active';
   }
 
   function rowBoundaryClass(rowId: string) {
     return activeResizeRowId === rowId ? 'row-boundary-active' : '';
   }
 
-  function renderColumnResizeHandle(column: TableColumn) {
+  function renderColumnResizeHandle(
+    column: TableColumn,
+    edge: ColumnResizeEdge = 'right',
+    placement: ColumnResizeEdge = edge
+  ) {
     return (
       <span
-        className="column-resize-handle"
+        className={`column-resize-handle ${placement}-edge`}
         role="separator"
         aria-orientation="vertical"
         tabIndex={0}
-        onMouseEnter={() => scheduleColumnHover(column.key)}
+        onMouseEnter={() => scheduleColumnHover(column.key, edge)}
         onMouseLeave={() => {
           clearColumnHoverTimer();
-          setHoveredColumnKey((current) => (current === column.key && activeColumnKey !== column.key ? null : current))
+          setHoveredColumnKey((current) =>
+            current === column.key && (activeColumnKey !== column.key || activeColumnEdge !== edge) ? null : current
+          );
         }}
-        onMouseDown={(event) => handleColumnResizeStart(event, column)}
+        onMouseDown={(event) => handleColumnResizeStart(event, column, edge)}
       />
     );
+  }
+
+  function renderColumnBoundaryHandle(column: TableColumn) {
+    const columnIndex = tableColumns.findIndex((candidate) => candidate.key === column.key);
+    const lastColumn = tableColumns[tableColumns.length - 1];
+
+    if (columnIndex === tableColumns.length - 1) {
+      return renderColumnResizeHandle(column, 'left', 'left');
+    }
+
+    if (columnIndex === tableColumns.length - 2) {
+      return renderColumnResizeHandle(lastColumn, 'left', 'right');
+    }
+
+    return renderColumnResizeHandle(column, 'right', 'right');
   }
 
   function renderRowResizeHandle(ad: Ad) {
@@ -1133,7 +1205,7 @@ export function App() {
           <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
             <colgroup>
               {tableColumns.map((column) => (
-                <col key={column.key} style={{ width: tableLayout.columnWidths[column.key] ?? column.width }} />
+                <col key={column.key} style={{ width: columnWidth(tableLayout, column) }} />
               ))}
             </colgroup>
             <thead>
@@ -1142,10 +1214,10 @@ export function App() {
                   <th
                     key={column.key}
                     className={columnBoundaryClass(column.key)}
-                    style={{ width: tableLayout.columnWidths[column.key] ?? column.width }}
+                    style={{ width: columnWidth(tableLayout, column) }}
                   >
                     <span className="column-title">{column.label}</span>
-                    {renderColumnResizeHandle(column)}
+                    {renderColumnBoundaryHandle(column)}
                   </th>
                 ))}
               </tr>
@@ -1159,12 +1231,12 @@ export function App() {
                   <tr key={ad.id} className={`resizable-row ${rowBoundaryClass(ad.id)}`.trim()} style={rowStyle}>
                     <td className={columnBoundaryClass('ad_archive_id')}>
                       <div className="cell-content mono">{ad.facebook_library_id}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.ad_archive_id)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.ad_archive_id)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('company_name')}>
                       <div className="cell-content">{ad.competitors?.name ?? ad.competitor_id}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.company_name)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.company_name)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('preview')}>
@@ -1175,14 +1247,14 @@ export function App() {
                           onAspectRatio={(aspectRatio) => rememberPreviewAspectRatio(ad.id, aspectRatio)}
                         />
                       </div>
-                      {renderColumnResizeHandle(tableColumnByKey.preview)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.preview)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('status')}>
                       <div className="cell-content">
                         <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
                       </div>
-                      {renderColumnResizeHandle(tableColumnByKey.status)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.status)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('link_url')}>
@@ -1192,32 +1264,32 @@ export function App() {
                       <ExternalLink size={14} />
                         </a>
                       </div>
-                      {renderColumnResizeHandle(tableColumnByKey.link_url)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.link_url)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('start_day')}>
                       <div className="cell-content">{ad.start_date_text ?? ''}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.start_day)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.start_day)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('stop_day')}>
                       <div className="cell-content">{stopDay(ad)}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.stop_day)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.stop_day)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('days_active')}>
                       <div className="cell-content number-cell">{daysActive(ad)}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.days_active)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.days_active)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('cta')}>
                       <div className="cell-content">{ad.cta ?? ''}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.cta)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.cta)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('body_text')}>
                       <div className="cell-content body-cell">{getAdBodyText(ad)}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.body_text)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.body_text)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('geo')}>
@@ -1227,12 +1299,12 @@ export function App() {
                           {geoSummary(ad)}
                         </button>
                       </div>
-                      {renderColumnResizeHandle(tableColumnByKey.geo)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.geo)}
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('last_seen_at')}>
                       <div className="cell-content date-cell">{formatDateTime(ad.last_seen_at)}</div>
-                      {renderColumnResizeHandle(tableColumnByKey.last_seen_at)}
+                      {renderColumnBoundaryHandle(tableColumnByKey.last_seen_at)}
                       {renderRowResizeHandle(ad)}
                     </td>
                   </tr>

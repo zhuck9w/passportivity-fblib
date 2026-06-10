@@ -328,7 +328,6 @@ select,
 .column-resize-handle {
   position: absolute;
   top: 0;
-  right: 0;
   z-index: 4;
   width: 10px;
   height: 100%;
@@ -336,23 +335,44 @@ select,
   touch-action: none;
 }
 
+.column-resize-handle.right-edge {
+  right: 0;
+}
+
+.column-resize-handle.left-edge {
+  left: 0;
+}
+
 .column-resize-handle::after {
   content: "";
   position: absolute;
   top: 8px;
   bottom: 8px;
-  right: 0;
   width: 2px;
   border-radius: 999px;
   background: transparent;
 }
 
-.ad-table th.column-boundary-active,
-.ad-table td.column-boundary-active {
+.column-resize-handle.right-edge::after {
+  right: 0;
+}
+
+.column-resize-handle.left-edge::after {
+  left: 0;
+}
+
+.ad-table th.column-boundary-right-active,
+.ad-table td.column-boundary-right-active {
   box-shadow: inset -2px 0 0 #1769e0;
 }
 
-.column-boundary-active .column-resize-handle::after {
+.ad-table th.column-boundary-left-active,
+.ad-table td.column-boundary-left-active {
+  box-shadow: inset 2px 0 0 #1769e0;
+}
+
+.column-boundary-right-active .column-resize-handle.right-edge::after,
+.column-boundary-left-active .column-resize-handle.left-edge::after {
   background: #1769e0;
 }
 
