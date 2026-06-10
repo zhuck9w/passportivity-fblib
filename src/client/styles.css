@@ -303,7 +303,7 @@ select,
 
 .ad-table th:nth-child(1),
 .ad-table td:nth-child(1) {
-  width: 150px;
+  width: 125px;
 }
 
 .ad-table th:nth-child(2),
@@ -317,10 +317,13 @@ select,
 }
 
 .ad-table th:nth-child(4),
-.ad-table td:nth-child(4),
+.ad-table td:nth-child(4) {
+  width: 110px;
+}
+
 .ad-table th:nth-child(8),
 .ad-table td:nth-child(8) {
-  width: 110px;
+  width: 90px;
 }
 
 .ad-table th:nth-child(5),
@@ -332,22 +335,43 @@ select,
 .ad-table td:nth-child(6),
 .ad-table th:nth-child(7),
 .ad-table td:nth-child(7) {
-  width: 150px;
+  width: 120px;
 }
 
 .ad-table th:nth-child(9),
 .ad-table td:nth-child(9) {
-  width: 140px;
+  width: 110px;
 }
 
 .ad-table th:nth-child(10),
 .ad-table td:nth-child(10) {
-  width: 500px;
+  width: 470px;
 }
 
 .ad-table th:nth-child(11),
 .ad-table td:nth-child(11) {
   width: 170px;
+}
+
+.ad-table th:nth-child(12),
+.ad-table td:nth-child(12) {
+  width: 150px;
+}
+
+.ad-table th:nth-child(1),
+.ad-table td:nth-child(1),
+.ad-table th:nth-child(6),
+.ad-table td:nth-child(6),
+.ad-table th:nth-child(7),
+.ad-table td:nth-child(7),
+.ad-table th:nth-child(8),
+.ad-table td:nth-child(8),
+.ad-table th:nth-child(9),
+.ad-table td:nth-child(9),
+.ad-table th:nth-child(12),
+.ad-table td:nth-child(12) {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .ad-table tbody tr:hover {

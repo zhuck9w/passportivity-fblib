@@ -339,6 +339,20 @@ function stopDay(ad: Ad) {
   return ad.status === 'active' ? '' : (ad.end_date_text ?? '');
 }
 
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 function extractAgeGroups(locations: AdLocation[] = []) {
   const ageGroups = new Set<string>();
   const agePattern = /\b(?:1[3-9]|[2-6]\d)-(?:1[3-9]|[2-6]\d)\b|\b65\+/g;
@@ -673,6 +687,7 @@ export function App() {
                 <th>cta</th>
                 <th>body_text</th>
                 <th>geo</th>
+                <th>last_seen_at</th>
               </tr>
             </thead>
             <tbody>
@@ -703,6 +718,7 @@ export function App() {
                       {geoSummary(ad)}
                     </button>
                   </td>
+                  <td className="date-cell">{formatDateTime(ad.last_seen_at)}</td>
                 </tr>
               ))}
             </tbody>
