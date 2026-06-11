@@ -64,6 +64,15 @@ type TableColumn = {
 
 type ColumnResizeEdge = 'left' | 'right';
 
+type SortMode = 'company' | 'new-first';
+
+const sortModeStorageKey = 'ad-library-sort-mode';
+
+function loadSortMode(): SortMode {
+  if (typeof window === 'undefined') return 'company';
+  return window.localStorage.getItem(sortModeStorageKey) === 'new-first' ? 'new-first' : 'company';
+}
+
 type TableLayout = {
   columnWidths: Record<string, number>;
   rowHeights: Record<string, number>;
@@ -833,6 +842,7 @@ export function App() {
   const [previewAd, setPreviewAd] = useState<Ad | null>(null);
   const [geoAd, setGeoAd] = useState<Ad | null>(null);
   const [filters, setFilters] = useState<Filters>({ competitorId: '', status: '', platform: '', q: '' });
+  const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
   const [collectCarousels, setCollectCarousels] = useState(true);
   const [tableLayout, setTableLayout] = useState<TableLayout>(() => loadTableLayout());
@@ -877,6 +887,10 @@ export function App() {
   useEffect(() => {
     saveTableLayout(tableLayout);
   }, [tableLayout]);
+
+  useEffect(() => {
+    window.localStorage.setItem(sortModeStorageKey, sortMode);
+  }, [sortMode]);
 
   const adIdsKey = useMemo(() => ads.map((ad) => ad.id).join(','), [ads]);
 
@@ -1162,6 +1176,14 @@ export function App() {
   const visibleAds = useMemo(() => competitorVisibleAds.filter((ad) => !ad.hidden), [competitorVisibleAds]);
   const hiddenCount = competitorVisibleAds.length - visibleAds.length;
   const renderedAds = revealHidden ? competitorVisibleAds : visibleAds;
+  // "NEW сверху": stable partition — all new ads first (regardless of company), order inside
+  // each group stays as fetched. With no new ads this is a no-op.
+  const sortedAds = useMemo(() => {
+    if (sortMode !== 'new-first') return renderedAds;
+    const fresh = renderedAds.filter((ad) => ad.status === 'new');
+    if (!fresh.length) return renderedAds;
+    return [...fresh, ...renderedAds.filter((ad) => ad.status !== 'new')];
+  }, [renderedAds, sortMode]);
   const counters = useMemo(
     () => ({
       competitors: competitors.length,
@@ -1412,6 +1434,24 @@ export function App() {
           <option value="Messenger">Messenger</option>
           <option value="Audience Network">Audience Network</option>
         </select>
+        <div className="sort-toggle" role="group" aria-label="Порядок строк">
+          <button
+            type="button"
+            className={sortMode === 'company' ? 'active' : ''}
+            title="Как собрано: строки идут подряд по компаниям"
+            onClick={() => setSortMode('company')}
+          >
+            По компаниям
+          </button>
+          <button
+            type="button"
+            className={sortMode === 'new-first' ? 'active' : ''}
+            title="Сначала все NEW, независимо от компании"
+            onClick={() => setSortMode('new-first')}
+          >
+            NEW сверху
+          </button>
+        </div>
       </section>
 
       <section className="table-section">
@@ -1472,7 +1512,7 @@ export function App() {
               </tr>
             </thead>
             <tbody>
-              {renderedAds.map((ad) => {
+              {sortedAds.map((ad) => {
                 const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
                 const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
 

@@ -3,6 +3,8 @@ import {
   assessAdCreative,
   imageUrlsFromMediaItems,
   isAiAssessmentEnabled,
+  mediaContainsVideo,
+  videoPlaceholderAssessment,
   type AdCreativeContext
 } from './aiAssessment';
 import {
@@ -169,7 +171,7 @@ export class ScrapeJobManager {
               if (aiEligible) {
                 const adId = saved.ad.id;
                 const libraryId = ad.facebook_library_id;
-                const imageUrls = imageUrlsFromMediaItems(ad.media_items);
+                const mediaItems = ad.media_items ?? [];
                 const context: AdCreativeContext = {
                   companyName: competitor.name,
                   title: ad.title ?? null,
@@ -177,7 +179,7 @@ export class ScrapeJobManager {
                   cta: ad.cta ?? null
                 };
                 aiQueued += 1;
-                aiChain = aiChain.then(() => this.assessSavedAd(runId, adId, libraryId, imageUrls, context));
+                aiChain = aiChain.then(() => this.assessSavedAd(runId, adId, libraryId, mediaItems, context));
               }
               this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: 0 });
               if (adsSaved >= limit) {
@@ -301,9 +303,27 @@ export class ScrapeJobManager {
     runId: string,
     adId: string,
     libraryId: string,
-    imageUrls: string[],
+    mediaItems: Parameters<typeof imageUrlsFromMediaItems>[0],
     context: AdCreativeContext
   ) {
+    if (mediaContainsVideo(mediaItems)) {
+      try {
+        await updateAdAssessment(adId, videoPlaceholderAssessment());
+        logScraper('info', 'AI assessment: video creative marked as «Видео»', {
+          run_id: runId,
+          library_id: libraryId
+        });
+      } catch (error) {
+        logScraper('error', 'AI assessment failed', {
+          run_id: runId,
+          library_id: libraryId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return;
+    }
+
+    const imageUrls = imageUrlsFromMediaItems(mediaItems);
     if (!imageUrls.length) {
       logScraper('warn', 'AI assessment skipped: no image urls', { run_id: runId, library_id: libraryId });
       return;

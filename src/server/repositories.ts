@@ -397,7 +397,9 @@ export async function upsertScrapedAd(input: ScrapedAdInput) {
         facebook_library_id: input.facebook_library_id,
         facebook_library_ids: [input.facebook_library_id],
         source_url: input.source_url,
-        status: input.status,
+        // A creative we have never stored before is "new" even if the scan is partial
+        // (reconciliation only runs on complete scans and will keep/flip it later).
+        status: input.status === 'active' ? 'new' : input.status,
         start_date_text: input.start_date_text ?? null,
         end_date_text: input.end_date_text ?? null,
         platforms: input.platforms,

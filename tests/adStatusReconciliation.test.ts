@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { reconcileScanLibraryIds } from '../src/server/adStatusReconciliation';
 
 describe('reconcileScanLibraryIds', () => {
-  it('uses the first complete scan as a baseline instead of marking every ad new', () => {
+  it('marks every ad from the first complete scan as new', () => {
     expect(reconcileScanLibraryIds([], ['300', '100', '300'], false)).toEqual({
-      activeIds: ['100', '300'],
-      newIds: [],
+      activeIds: [],
+      newIds: ['100', '300'],
       stoppedIds: []
     });
   });

@@ -35,10 +35,23 @@ export function isAiAssessmentEnabled() {
   return env.aiAssessmentEnabled && Boolean(env.openaiKey);
 }
 
+// Video creatives are not analyzed: a poster frame says nothing about the video itself,
+// so every ai_* slot just gets this placeholder.
+export const videoAssessmentPlaceholder = 'Видео';
+
+export function mediaContainsVideo(items: AdMediaItem[] | null | undefined) {
+  return (items ?? []).some((item) => item.type === 'video');
+}
+
+export function videoPlaceholderAssessment(): AdAiAssessment {
+  return Object.fromEntries(adAiAssessmentKeys.map((key) => [key, videoAssessmentPlaceholder])) as AdAiAssessment;
+}
+
 export function imageUrlsFromMediaItems(items: AdMediaItem[] | null | undefined) {
   const urls: string[] = [];
   for (const item of items ?? []) {
-    const candidate = item.type === 'image' ? item.src : item.poster;
+    if (item.type !== 'image') continue;
+    const candidate = item.src;
     if (!candidate || !/^https?:\/\//i.test(candidate)) continue;
     if (!urls.includes(candidate)) urls.push(candidate);
   }

@@ -284,6 +284,40 @@ select,
   min-width: 160px;
 }
 
+.sort-toggle {
+  display: inline-flex;
+  height: 38px;
+  border: 1px solid #d7dee2;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.sort-toggle button {
+  border: 0;
+  background: transparent;
+  color: #44525c;
+  padding: 0 12px;
+  font-size: 14px;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.sort-toggle button + button {
+  border-left: 1px solid #d7dee2;
+}
+
+.sort-toggle button:hover {
+  background: #f3f7f9;
+}
+
+.sort-toggle button.active {
+  background: #1769e0;
+  color: #fff;
+}
+
 .table-section {
   min-width: 0;
   flex: 1 1 auto;

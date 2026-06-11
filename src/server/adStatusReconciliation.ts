@@ -16,10 +16,11 @@ export function reconcileScanLibraryIds(
   const previous = new Set(uniqueIds(previousLibraryIds));
   const current = new Set(uniqueIds(currentLibraryIds));
 
+  // First complete scan: every collected creative is brand new for us, so mark all as new.
   if (!hasPreviousCompleteScan) {
     return {
-      activeIds: Array.from(current).sort(),
-      newIds: [],
+      activeIds: [],
+      newIds: Array.from(current).sort(),
       stoppedIds: []
     };
   }
