@@ -1367,34 +1367,6 @@ export function App() {
         </div>
       </section>
 
-      <section className="bottom-grid">
-        <aside className="runs">
-          <h2>Последние запуски</h2>
-          {(runs?.persisted ?? []).slice(0, 8).map((run) => (
-            <div className="run-row" key={run.id}>
-              <span className={`status-pill ${run.status}`}>{run.status}</span>
-              <span>{run.competitors?.name ?? 'Все включенные'}</span>
-              <small>
-                найдено {run.ads_found}, сохранено {run.ads_saved}
-              </small>
-            </div>
-          ))}
-        </aside>
-        <aside className="log-panel">
-          <div className="log-panel-header">
-            <h2>Журнал</h2>
-            <button
-              className="icon-button"
-              onClick={() => fetchLog('scraper', 80).then((log) => setScraperLog(log.lines))}
-              title="Обновить журнал"
-            >
-              <RefreshCw size={16} />
-            </button>
-          </div>
-          <pre>{scraperLog.length ? scraperLog.join('\n') : 'Лог появится после запуска сбора.'}</pre>
-        </aside>
-      </section>
-
       {competitorsOpen && (
         <CompetitorsDialog
           competitors={competitors}

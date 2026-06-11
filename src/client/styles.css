@@ -30,8 +30,12 @@ button {
 
 main {
   width: 100%;
+  height: 100vh;
   margin: 0;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -282,11 +286,17 @@ select,
 
 .table-section {
   min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .table-shell {
   width: 100%;
-  overflow-x: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   border: 1px solid #d7dee2;
   border-radius: 8px;
   background: #fff;
