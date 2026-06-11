@@ -28,6 +28,7 @@ import {
   useRef,
   useState
 } from 'react';
+import { adAiAssessmentKeys } from '../shared/types';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
   bulkCreateCompetitors,
@@ -89,7 +90,8 @@ const tableColumns: TableColumn[] = [
   { key: 'cta', label: 'cta', width: 110, minWidth: 90, maxWidth: 260 },
   { key: 'body_text', label: 'body_text', width: 470, minWidth: 220, maxWidth: 900 },
   { key: 'geo', label: 'geo', width: 170, minWidth: 120, maxWidth: 360 },
-  { key: 'last_seen_at', label: 'last_seen_at', width: 150, minWidth: 120, maxWidth: 260 }
+  { key: 'last_seen_at', label: 'last_seen_at', width: 150, minWidth: 120, maxWidth: 260 },
+  ...adAiAssessmentKeys.map((key) => ({ key, label: key, width: 230, minWidth: 150, maxWidth: 600 }))
 ];
 
 const tableColumnByKey = Object.fromEntries(tableColumns.map((column) => [column.key, column])) as Record<
@@ -1481,6 +1483,13 @@ export function App() {
                       {renderColumnBoundaryHandle(tableColumnByKey.last_seen_at)}
                       {renderRowResizeHandle(ad)}
                     </td>
+                    {adAiAssessmentKeys.map((key) => (
+                      <td key={key} className={columnBoundaryClass(key)}>
+                        <div className="cell-content body-cell ai-cell">{ad[key] ?? ''}</div>
+                        {renderColumnBoundaryHandle(tableColumnByKey[key])}
+                        {renderRowResizeHandle(ad)}
+                      </td>
+                    ))}
                   </tr>
                 );
               })}

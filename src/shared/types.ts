@@ -88,6 +88,21 @@ export type AdVariation = {
   updated_at: string;
 };
 
+export const adAiAssessmentKeys = [
+  'ai_main_object',
+  'ai_main_color',
+  'ai_jtbd',
+  'ai_utp',
+  'ai_description',
+  'ai_hook',
+  'ai_offer',
+  'ai_psychology'
+] as const;
+
+export type AdAiAssessmentKey = (typeof adAiAssessmentKeys)[number];
+
+export type AdAiAssessment = Record<AdAiAssessmentKey, string>;
+
 export type Ad = {
   id: string;
   competitor_id: string;
@@ -107,6 +122,15 @@ export type Ad = {
   dedupe_key: string;
   duplicate_count: number;
   hidden: boolean;
+  ai_main_object: string | null;
+  ai_main_color: string | null;
+  ai_jtbd: string | null;
+  ai_utp: string | null;
+  ai_description: string | null;
+  ai_hook: string | null;
+  ai_offer: string | null;
+  ai_psychology: string | null;
+  ai_assessed_at: string | null;
   first_seen_scan_id: string | null;
   last_seen_scan_id: string | null;
   stopped_scan_id: string | null;

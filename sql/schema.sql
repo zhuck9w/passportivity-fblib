@@ -44,6 +44,15 @@ create table if not exists public.ads (
   dedupe_key text not null,
   duplicate_count integer not null default 1,
   hidden boolean not null default false,
+  ai_main_object text,
+  ai_main_color text,
+  ai_jtbd text,
+  ai_utp text,
+  ai_description text,
+  ai_hook text,
+  ai_offer text,
+  ai_psychology text,
+  ai_assessed_at timestamptz,
   first_seen_scan_id uuid,
   last_seen_scan_id uuid,
   stopped_scan_id uuid,
@@ -135,6 +144,15 @@ alter table public.scrape_runs add constraint scrape_runs_status_check
 
 alter table public.competitors add column if not exists visible boolean not null default true;
 alter table public.ads add column if not exists hidden boolean not null default false;
+alter table public.ads add column if not exists ai_main_object text;
+alter table public.ads add column if not exists ai_main_color text;
+alter table public.ads add column if not exists ai_jtbd text;
+alter table public.ads add column if not exists ai_utp text;
+alter table public.ads add column if not exists ai_description text;
+alter table public.ads add column if not exists ai_hook text;
+alter table public.ads add column if not exists ai_offer text;
+alter table public.ads add column if not exists ai_psychology text;
+alter table public.ads add column if not exists ai_assessed_at timestamptz;
 alter table public.ads add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ad_variations add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ads add column if not exists first_seen_scan_id uuid;

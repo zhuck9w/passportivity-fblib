@@ -553,6 +553,11 @@ select,
   overflow: auto;
 }
 
+.ai-cell {
+  font-size: 12.5px;
+  color: #2c3a44;
+}
+
 .table-link,
 .geo-button {
   display: inline-flex;

@@ -1,5 +1,11 @@
 import type { Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
+  assessAdCreative,
+  imageUrlsFromMediaItems,
+  isAiAssessmentEnabled,
+  type AdCreativeContext
+} from './aiAssessment';
+import {
   createCompetitorScanRun,
   createScrapeRun,
   finishCompetitorScan,
@@ -7,6 +13,7 @@ import {
   listEnabledCompetitors,
   markCompetitorScraped,
   recordAdScanObservation,
+  updateAdAssessment,
   updateScrapeRun,
   upsertScrapedAd
 } from './repositories';
@@ -110,6 +117,8 @@ export class ScrapeJobManager {
     let adsFound = 0;
     let adsSaved = 0;
     let limitReached = false;
+    let aiQueued = 0;
+    let aiChain: Promise<void> = Promise.resolve();
     const errors: string[] = [];
 
     for (const competitor of competitors) {
@@ -148,6 +157,19 @@ export class ScrapeJobManager {
                 library_id: ad.facebook_library_id,
                 existing: saved.isExisting
               });
+              if (isAiAssessmentEnabled() && !saved.ad.ai_assessed_at) {
+                const adId = saved.ad.id;
+                const libraryId = ad.facebook_library_id;
+                const imageUrls = imageUrlsFromMediaItems(ad.media_items);
+                const context: AdCreativeContext = {
+                  companyName: competitor.name,
+                  title: ad.title ?? null,
+                  bodyText: ad.body_text ?? ad.preview_text ?? null,
+                  cta: ad.cta ?? null
+                };
+                aiQueued += 1;
+                aiChain = aiChain.then(() => this.assessSavedAd(runId, adId, libraryId, imageUrls, context));
+              }
               this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: 0 });
               if (adsSaved >= limit) {
                 limitReached = true;
@@ -212,6 +234,11 @@ export class ScrapeJobManager {
       }
     }
 
+    if (aiQueued > 0) {
+      this.patch(runId, { message: `Жду завершения AI-анализа креативов (${aiQueued})` });
+      await aiChain;
+    }
+
     const status = limitReached
       ? 'succeeded'
       : controller.signal.aborted
@@ -259,6 +286,36 @@ export class ScrapeJobManager {
       errors: errors.length
     });
     this.controllers.delete(runId);
+  }
+
+  private async assessSavedAd(
+    runId: string,
+    adId: string,
+    libraryId: string,
+    imageUrls: string[],
+    context: AdCreativeContext
+  ) {
+    if (!imageUrls.length) {
+      logScraper('warn', 'AI assessment skipped: no image urls', { run_id: runId, library_id: libraryId });
+      return;
+    }
+
+    try {
+      const assessment = await assessAdCreative({ imageUrls, context });
+      await updateAdAssessment(adId, assessment);
+      logScraper('info', 'AI assessment saved', {
+        run_id: runId,
+        library_id: libraryId,
+        images: imageUrls.length,
+        model: env.openaiModel
+      });
+    } catch (error) {
+      logScraper('error', 'AI assessment failed', {
+        run_id: runId,
+        library_id: libraryId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   private patch(runId: string, patch: Partial<ScrapeJobSnapshot>) {

@@ -1,5 +1,6 @@
 import type {
   Ad,
+  AdAiAssessment,
   AdLocation,
   AdScanObservation,
   Competitor,
@@ -310,6 +311,17 @@ export async function listAds(filters: {
 
   const result = await query;
   return throwIfError<Ad[]>(result);
+}
+
+export async function updateAdAssessment(id: string, assessment: AdAiAssessment) {
+  const now = new Date().toISOString();
+  const result = await supabase
+    .from('ads')
+    .update({ ...assessment, ai_assessed_at: now, updated_at: now })
+    .eq('id', id)
+    .select('id')
+    .single();
+  return throwIfError<Pick<Ad, 'id'>>(result);
 }
 
 export async function setAdHidden(id: string, hidden: boolean) {
