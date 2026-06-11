@@ -34,11 +34,13 @@ import {
   createCompetitor,
   deleteCompetitor,
   fetchAd,
+  fetchAdLocations,
   fetchAds,
   fetchCompetitors,
   fetchJob,
   fetchLog,
   fetchRuns,
+  setAdHidden,
   startScrape,
   stopScrape,
   updateCompetitor
@@ -75,6 +77,7 @@ const defaultPreviewAspectRatio = 1;
 const defaultRowHeight = previewThumbWidth + tableCellVerticalPadding + defaultRowBottomGap;
 const minRowHeight = 54;
 const maxRowHeight = 520;
+const controlColumnWidth = 44;
 
 const tableColumns: TableColumn[] = [
   { key: 'ad_archive_id', label: 'ad_archive_id', width: 125, minWidth: 96, maxWidth: 260 },
@@ -670,14 +673,6 @@ function extractAgeGroups(locations: AdLocation[] = []) {
   return Array.from(ageGroups).sort((left, right) => left.localeCompare(right, 'ru'));
 }
 
-function geoSummary(ad: Ad) {
-  const locations = ad.ad_locations ?? [];
-  if (!locations.length) return 'открыть';
-
-  const ages = extractAgeGroups(locations);
-  return ages.length ? `${locations.length} гео / ${ages.join(', ')}` : `${locations.length} гео`;
-}
-
 function extractFormattedTextFromPreviewHtml(html: string | null) {
   if (!html || typeof DOMParser === 'undefined') return '';
 
@@ -817,6 +812,9 @@ function friendlyCompetitorError(message: string) {
 export function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
+  const [revealHidden, setRevealHidden] = useState(false);
+  const [geoByAd, setGeoByAd] = useState<Record<string, AdLocation[]>>({});
+  const [geoLoading, setGeoLoading] = useState(false);
   const [previewAd, setPreviewAd] = useState<Ad | null>(null);
   const [geoAd, setGeoAd] = useState<Ad | null>(null);
   const [filters, setFilters] = useState<Filters>({ competitorId: '', status: '', platform: '', q: '' });
@@ -874,6 +872,35 @@ export function App() {
     saveTableLayout(tableLayout);
   }, [tableLayout]);
 
+  const adIdsKey = useMemo(() => ads.map((ad) => ad.id).join(','), [ads]);
+
+  useEffect(() => {
+    const ids = adIdsKey ? adIdsKey.split(',') : [];
+    if (!ids.length) {
+      setGeoByAd({});
+      setGeoLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setGeoLoading(true);
+    fetchAdLocations(ids)
+      .then((map) => {
+        if (cancelled) return;
+        const next: Record<string, AdLocation[]> = {};
+        for (const id of ids) next[id] = map[id] ?? [];
+        setGeoByAd(next);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setGeoLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [adIdsKey]);
+
   useLayoutEffect(() => {
     const tableShell = tableShellRef.current;
     if (!tableShell) return undefined;
@@ -894,7 +921,7 @@ export function App() {
 
     setTableLayout((current) => {
       const currentTableWidth = tableColumns.reduce((sum, column) => sum + columnWidth(current, column), 0);
-      const missingWidth = tableShellWidth - currentTableWidth;
+      const missingWidth = tableShellWidth - currentTableWidth - controlColumnWidth;
 
       if (missingWidth <= 0) return current;
 
@@ -966,7 +993,7 @@ export function App() {
   }
 
   async function openGeo(ad: Ad) {
-    setGeoAd(ad);
+    setGeoAd({ ...ad, ad_locations: geoByAd[ad.id] ?? ad.ad_locations ?? [] });
     try {
       setGeoAd(await fetchAd(ad.id));
     } catch (requestError) {
@@ -1123,10 +1150,13 @@ export function App() {
     () => new Set(competitors.filter((competitor) => competitor.visible === false).map((competitor) => competitor.id)),
     [competitors]
   );
-  const visibleAds = useMemo(
+  const competitorVisibleAds = useMemo(
     () => ads.filter((ad) => !hiddenCompetitorIds.has(ad.competitor_id)),
     [ads, hiddenCompetitorIds]
   );
+  const visibleAds = useMemo(() => competitorVisibleAds.filter((ad) => !ad.hidden), [competitorVisibleAds]);
+  const hiddenCount = competitorVisibleAds.length - visibleAds.length;
+  const renderedAds = revealHidden ? competitorVisibleAds : visibleAds;
   const counters = useMemo(
     () => ({
       competitors: competitors.length,
@@ -1140,7 +1170,7 @@ export function App() {
     () => tableColumns.reduce((sum, column) => sum + columnWidth(tableLayout, column), 0),
     [tableLayout.columnWidths]
   );
-  const tableWidth = baseTableWidth;
+  const tableWidth = baseTableWidth + controlColumnWidth;
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
   const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
@@ -1199,6 +1229,49 @@ export function App() {
         }}
         onMouseDown={(event) => handleRowResizeStart(event, ad)}
       />
+    );
+  }
+
+  function handleToggleAdHidden(ad: Ad, hidden: boolean) {
+    setAds((current) => current.map((item) => (item.id === ad.id ? { ...item, hidden } : item)));
+    setAdHidden(ad.id, hidden).catch((requestError) => {
+      setAds((current) => current.map((item) => (item.id === ad.id ? { ...item, hidden: !hidden } : item)));
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    });
+  }
+
+  function renderAdHideButton(ad: Ad) {
+    const hidden = Boolean(ad.hidden);
+    return (
+      <button
+        type="button"
+        className={`row-hide-button ${hidden ? 'is-hidden' : ''}`.trim()}
+        onClick={() => handleToggleAdHidden(ad, !hidden)}
+        title={hidden ? 'Вернуть объявление в таблицу' : 'Скрыть объявление из таблицы'}
+      >
+        {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    );
+  }
+
+  function renderGeoCell(ad: Ad) {
+    const locations = geoByAd[ad.id];
+
+    if (locations === undefined) {
+      return geoLoading ? (
+        <span className="geo-loading">
+          <Loader2 size={14} className="spin" />
+        </span>
+      ) : null;
+    }
+
+    if (!locations.length) return null;
+
+    return (
+      <button type="button" className="geo-button" onClick={() => void openGeo(ad)}>
+        <MapPinned size={15} />
+        geo
+      </button>
     );
   }
 
@@ -1297,12 +1370,27 @@ export function App() {
         <div className="table-shell" ref={tableShellRef}>
           <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
             <colgroup>
+              <col style={{ width: controlColumnWidth }} />
               {tableColumns.map((column) => (
                 <col key={column.key} style={{ width: columnWidth(tableLayout, column) }} />
               ))}
             </colgroup>
             <thead>
               <tr>
+                <th className="control-col" style={{ width: controlColumnWidth }}>
+                  <button
+                    type="button"
+                    className={`control-toggle ${revealHidden ? 'is-revealing' : ''}`.trim()}
+                    onClick={() => setRevealHidden((value) => !value)}
+                    title={
+                      revealHidden
+                        ? `Скрыть скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
+                        : `Показать скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
+                    }
+                  >
+                    {revealHidden ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </th>
                 {tableColumns.map((column) => (
                   <th
                     key={column.key}
@@ -1316,12 +1404,22 @@ export function App() {
               </tr>
             </thead>
             <tbody>
-              {visibleAds.map((ad) => {
+              {renderedAds.map((ad) => {
                 const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
                 const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
 
                 return (
-                  <tr key={ad.id} className={`resizable-row ${rowBoundaryClass(ad.id)}`.trim()} style={rowStyle}>
+                  <tr
+                    key={ad.id}
+                    className={['resizable-row', rowBoundaryClass(ad.id), ad.hidden ? 'row-hidden' : '']
+                      .filter(Boolean)
+                      .join(' ')}
+                    style={rowStyle}
+                  >
+                    <td className="control-col">
+                      <div className="cell-content control-cell">{renderAdHideButton(ad)}</div>
+                      {renderRowResizeHandle(ad)}
+                    </td>
                     <td className={columnBoundaryClass('ad_archive_id')}>
                       <div className="cell-content mono">{ad.facebook_library_id}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.ad_archive_id)}
@@ -1386,12 +1484,7 @@ export function App() {
                       {renderRowResizeHandle(ad)}
                     </td>
                     <td className={columnBoundaryClass('geo')}>
-                      <div className="cell-content">
-                        <button className="geo-button" onClick={() => void openGeo(ad)}>
-                          <MapPinned size={15} />
-                          {geoSummary(ad)}
-                        </button>
-                      </div>
+                      <div className="cell-content">{renderGeoCell(ad)}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.geo)}
                       {renderRowResizeHandle(ad)}
                     </td>
@@ -1405,11 +1498,13 @@ export function App() {
               })}
             </tbody>
           </table>
-          {!visibleAds.length && (
+          {!renderedAds.length && (
             <div className="empty">
-              {ads.length
-                ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
-                : 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'}
+              {ads.length === 0
+                ? 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'
+                : competitorVisibleAds.length === 0
+                  ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
+                  : 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'}
             </div>
           )}
         </div>
@@ -1480,6 +1575,19 @@ function CompetitorsDialog({
   const [bulkText, setBulkText] = useState('');
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkFeedback, setBulkFeedback] = useState<{ added: number; problems: string[] } | null>(null);
+  const [togglingEnabledId, setTogglingEnabledId] = useState<string | null>(null);
+
+  async function handleToggleEnabled(competitor: Competitor, enabled: boolean) {
+    setTogglingEnabledId(competitor.id);
+    try {
+      await updateCompetitor(competitor.id, { enabled });
+      onChanged();
+    } catch (toggleError) {
+      console.error(toggleError);
+    } finally {
+      setTogglingEnabledId(null);
+    }
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -1610,19 +1718,26 @@ function CompetitorsDialog({
                   {competitor.last_scraped_at ? new Date(competitor.last_scraped_at).toLocaleString('ru-RU') : 'еще не было'}
                 </small>
               </div>
-              <label
-                className="switch"
-                title={competitor.enabled ? 'Участвует в сборе — отключить' : 'Не участвует в сборе — включить'}
-              >
-                <input
-                  type="checkbox"
-                  checked={competitor.enabled}
-                  onChange={(event) =>
-                    updateCompetitor(competitor.id, { enabled: event.target.checked }).then(onChanged).catch(console.error)
-                  }
-                />
-                <span />
-              </label>
+              <div className={`switch-wrap ${togglingEnabledId === competitor.id ? 'is-toggling' : ''}`.trim()}>
+                <label
+                  className="switch"
+                  title={competitor.enabled ? 'Участвует в сборе — отключить' : 'Не участвует в сборе — включить'}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={competitor.enabled ? 'Отключить конкурента из сбора' : 'Включить конкурента в сбор'}
+                    checked={competitor.enabled}
+                    disabled={togglingEnabledId === competitor.id}
+                    onChange={(event) => void handleToggleEnabled(competitor, event.target.checked)}
+                  />
+                  <span />
+                </label>
+                {togglingEnabledId === competitor.id && (
+                  <span className="switch-spinner">
+                    <Loader2 size={14} className="spin" />
+                  </span>
+                )}
+              </div>
               <button
                 className={`icon-button ${competitor.visible === false ? 'visibility-off' : ''}`.trim()}
                 onClick={() =>

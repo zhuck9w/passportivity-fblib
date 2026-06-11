@@ -106,6 +106,7 @@ export type Ad = {
   media_items: AdMediaItem[];
   dedupe_key: string;
   duplicate_count: number;
+  hidden: boolean;
   first_seen_scan_id: string | null;
   last_seen_scan_id: string | null;
   stopped_scan_id: string | null;

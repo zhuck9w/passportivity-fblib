@@ -390,6 +390,87 @@ select,
   background: #fbfcfd;
 }
 
+.ad-table th.control-col,
+.ad-table td.control-col {
+  position: sticky;
+  left: 0;
+  text-align: center;
+  border-right: 1px solid #e6ecef;
+}
+
+.ad-table th.control-col {
+  z-index: 5;
+  padding: 0;
+  background: #edf2f5;
+}
+
+.ad-table td.control-col {
+  z-index: 2;
+  background: #fff;
+}
+
+.ad-table tbody tr:hover td.control-col {
+  background: #fbfcfd;
+}
+
+.control-col .control-cell {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px 4px;
+}
+
+.control-toggle,
+.row-hide-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #5a6a74;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.control-toggle:hover,
+.row-hide-button:hover {
+  background: #e1e9ee;
+  color: #1769e0;
+}
+
+.control-toggle.is-revealing {
+  color: #1769e0;
+  background: #dbe7fb;
+}
+
+.row-hide-button.is-hidden {
+  color: #b42318;
+}
+
+.row-hide-button.is-hidden:hover {
+  color: #b42318;
+  background: #fde8e4;
+}
+
+.ad-table tbody tr.row-hidden {
+  background: #fbf4f3;
+}
+
+.ad-table tbody tr.row-hidden td .cell-content:not(.control-cell) {
+  opacity: 0.5;
+}
+
+.ad-table tbody tr.row-hidden:hover,
+.ad-table tbody tr.row-hidden:hover td:last-child,
+.ad-table tbody tr.row-hidden:hover td.control-col {
+  background: #f7ebe9;
+}
+
 .ad-table th.column-boundary-right-active,
 .ad-table td.column-boundary-right-active {
   box-shadow: inset -2px 0 0 #1769e0;
@@ -471,18 +552,18 @@ select,
   background: #1769e0;
 }
 
-.ad-table th:nth-child(1),
-.ad-table th:nth-child(6),
+.ad-table th:nth-child(2),
 .ad-table th:nth-child(7),
 .ad-table th:nth-child(8),
 .ad-table th:nth-child(9),
-.ad-table th:nth-child(12),
-.ad-table td:nth-child(1) .cell-content,
-.ad-table td:nth-child(6) .cell-content,
+.ad-table th:nth-child(10),
+.ad-table th:nth-child(13),
+.ad-table td:nth-child(2) .cell-content,
 .ad-table td:nth-child(7) .cell-content,
 .ad-table td:nth-child(8) .cell-content,
 .ad-table td:nth-child(9) .cell-content,
-.ad-table td:nth-child(12) .cell-content {
+.ad-table td:nth-child(10) .cell-content,
+.ad-table td:nth-child(13) .cell-content {
   padding-left: 8px;
   padding-right: 8px;
 }
@@ -535,6 +616,14 @@ select,
 .geo-button:hover {
   background: #eef7f7;
   border-color: #9ac2c4;
+}
+
+.geo-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  color: #5a6a74;
 }
 
 .preview-thumb {
@@ -894,6 +983,25 @@ select,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.switch-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.switch-wrap.is-toggling .switch {
+  opacity: 0.3;
+}
+
+.switch-spinner {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #1769e0;
+  pointer-events: none;
 }
 
 .switch {

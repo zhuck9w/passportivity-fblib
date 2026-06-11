@@ -1,4 +1,4 @@
-import type { Ad, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
+import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -79,6 +79,20 @@ export function fetchAds(filters: { competitorId?: string; status?: string; plat
 
 export function fetchAd(id: string) {
   return api<Ad>(`/api/ads/${id}`);
+}
+
+export function setAdHidden(id: string, hidden: boolean) {
+  return api<Ad>(`/api/ads/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ hidden })
+  });
+}
+
+export function fetchAdLocations(ids: string[]) {
+  return api<Record<string, AdLocation[]>>('/api/ad-locations', {
+    method: 'POST',
+    body: JSON.stringify({ ids })
+  });
 }
 
 export function startScrape(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {

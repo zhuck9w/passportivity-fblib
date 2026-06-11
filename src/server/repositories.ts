@@ -1,4 +1,12 @@
-import type { Ad, AdScanObservation, Competitor, CompetitorScanRun, ScrapedAdInput, ScrapeRun } from '../shared/types';
+import type {
+  Ad,
+  AdLocation,
+  AdScanObservation,
+  Competitor,
+  CompetitorScanRun,
+  ScrapedAdInput,
+  ScrapeRun
+} from '../shared/types';
 import { reconcileScanLibraryIds, type ScanReconciliationResult } from './adStatusReconciliation';
 import { supabase } from './supabase';
 
@@ -302,6 +310,28 @@ export async function listAds(filters: {
 
   const result = await query;
   return throwIfError<Ad[]>(result);
+}
+
+export async function setAdHidden(id: string, hidden: boolean) {
+  const result = await supabase
+    .from('ads')
+    .update({ hidden })
+    .eq('id', id)
+    .select('*, competitors(id, name, facebook_page_id)')
+    .single();
+  return throwIfError<Ad>(result);
+}
+
+export async function listAdLocations(adIds: string[]) {
+  const grouped: Record<string, AdLocation[]> = {};
+  if (!adIds.length) return grouped;
+
+  const result = await supabase.from('ad_locations').select('*').in('ad_id', adIds);
+  const rows = throwIfError<AdLocation[]>(result);
+  for (const row of rows) {
+    (grouped[row.ad_id] ??= []).push(row);
+  }
+  return grouped;
 }
 
 export async function getAd(id: string) {

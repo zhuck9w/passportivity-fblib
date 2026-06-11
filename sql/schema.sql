@@ -43,6 +43,7 @@ create table if not exists public.ads (
   media_items jsonb not null default '[]'::jsonb,
   dedupe_key text not null,
   duplicate_count integer not null default 1,
+  hidden boolean not null default false,
   first_seen_scan_id uuid,
   last_seen_scan_id uuid,
   stopped_scan_id uuid,
@@ -133,6 +134,7 @@ alter table public.scrape_runs add constraint scrape_runs_status_check
   check (status in ('pending', 'running', 'succeeded', 'failed', 'stopped'));
 
 alter table public.competitors add column if not exists visible boolean not null default true;
+alter table public.ads add column if not exists hidden boolean not null default false;
 alter table public.ads add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ad_variations add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ads add column if not exists first_seen_scan_id uuid;

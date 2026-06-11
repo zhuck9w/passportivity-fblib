@@ -8,9 +8,11 @@ import {
   createCompetitor,
   deleteCompetitor,
   getAd,
+  listAdLocations,
   listAds,
   listCompetitors,
   listScrapeRuns,
+  setAdHidden,
   updateCompetitor
 } from './repositories';
 import { scrapeJobManager } from './scrapeJobManager';
@@ -32,6 +34,14 @@ const competitorUpdateSchema = competitorCreateSchema.partial();
 
 const competitorBulkSchema = z.object({
   items: z.array(competitorCreateSchema).min(1).max(500)
+});
+
+const adUpdateSchema = z.object({
+  hidden: z.boolean()
+});
+
+const adLocationsSchema = z.object({
+  ids: z.array(z.string().uuid()).max(500)
 });
 
 const scrapeStartSchema = z.object({
@@ -127,10 +137,26 @@ app.get(
   })
 );
 
+app.post(
+  '/api/ad-locations',
+  asyncRoute(async (req, res) => {
+    const { ids } = adLocationsSchema.parse(req.body ?? {});
+    res.json(await listAdLocations(ids));
+  })
+);
+
 app.get(
   '/api/ads/:id',
   asyncRoute(async (req, res) => {
     res.json(await getAd(routeParam(req.params.id)));
+  })
+);
+
+app.patch(
+  '/api/ads/:id',
+  asyncRoute(async (req, res) => {
+    const input = adUpdateSchema.parse(req.body);
+    res.json(await setAdHidden(routeParam(req.params.id), input.hidden));
   })
 );
 
