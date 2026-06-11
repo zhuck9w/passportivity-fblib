@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
+import { isAiAssessmentEnabled } from './aiAssessment';
 import { env } from './env';
 import { asyncRoute, errorHandler, routeParam } from './httpUtils';
 import { logServer, readLogTail } from './logger';
@@ -24,6 +25,8 @@ app.get('/api/health', (_req, res) => {
     scraper_headless: env.scraperHeadless,
     scraper_limit: env.scraperLimit,
     scraper_collect_carousels: env.scraperCollectCarousels,
+    ai_assessment_enabled: isAiAssessmentEnabled(),
+    ai_assessment_force: env.aiAssessmentForce,
     active_jobs: scrapeJobManager.list().filter((job) => job.status === 'running').length
   });
 });

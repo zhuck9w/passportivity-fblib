@@ -57,6 +57,9 @@ export const env = {
   openaiKey: readOptional('OPENAI_KEY') ?? readOptional('OPENAI_API_KEY'),
   openaiModel: readOptional('OPENAI_MODEL') ?? 'gpt-4o-mini',
   aiAssessmentEnabled: readBoolean('AI_ASSESSMENT_ENABLED', true),
+  // Force re-assessment of already assessed ads (e.g. after changing the model or prompts).
+  // Deliberately env-only, not exposed in the UI.
+  aiAssessmentForce: readBoolean('AI_ASSESSMENT_FORCE', false),
   scraperMaxAds: defaultScraperLimit,
   scraperMaxScrolls: readNumber('SCRAPER_MAX_SCROLLS', 12),
   scraperNavigationTimeoutMs: readNumber('SCRAPER_NAVIGATION_TIMEOUT_MS', 45000),

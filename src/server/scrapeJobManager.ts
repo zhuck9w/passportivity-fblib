@@ -157,7 +157,16 @@ export class ScrapeJobManager {
                 library_id: ad.facebook_library_id,
                 existing: saved.isExisting
               });
-              if (isAiAssessmentEnabled() && !saved.ad.ai_assessed_at) {
+              const aiEligible = isAiAssessmentEnabled() && (env.aiAssessmentForce || !saved.ad.ai_assessed_at);
+              logScraper('info', 'AI assessment decision', {
+                run_id: runId,
+                library_id: ad.facebook_library_id,
+                enabled: isAiAssessmentEnabled(),
+                force: env.aiAssessmentForce,
+                already_assessed: Boolean(saved.ad.ai_assessed_at),
+                queued: aiEligible
+              });
+              if (aiEligible) {
                 const adId = saved.ad.id;
                 const libraryId = ad.facebook_library_id;
                 const imageUrls = imageUrlsFromMediaItems(ad.media_items);
