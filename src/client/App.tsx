@@ -21,6 +21,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -795,6 +796,8 @@ export function App() {
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [previewAspectRatios, setPreviewAspectRatios] = useState<Record<string, number>>({});
+  const [tableShellWidth, setTableShellWidth] = useState(0);
+  const tableShellRef = useRef<HTMLDivElement | null>(null);
   const columnHoverTimer = useRef<number | null>(null);
   const rowHoverTimer = useRef<number | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
@@ -836,6 +839,21 @@ export function App() {
   useEffect(() => {
     saveTableLayout(tableLayout);
   }, [tableLayout]);
+
+  useLayoutEffect(() => {
+    const tableShell = tableShellRef.current;
+    if (!tableShell) return undefined;
+
+    const measureTableShell = () => {
+      setTableShellWidth(Math.ceil(tableShell.clientWidth));
+    };
+
+    measureTableShell();
+
+    const resizeObserver = new ResizeObserver(measureTableShell);
+    resizeObserver.observe(tableShell);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   useEffect(
     () => () => {
@@ -947,8 +965,10 @@ export function App() {
     const startWidth = columnWidth(tableLayout, column);
     const columnIndex = tableColumns.findIndex((candidate) => candidate.key === column.key);
     const previousColumn = edge === 'left' ? tableColumns[columnIndex - 1] : null;
+    const nextColumn = edge === 'right' ? tableColumns[columnIndex + 1] : null;
     const startPreviousWidth = previousColumn ? columnWidth(tableLayout, previousColumn) : 0;
-    const pairWidth = startWidth + startPreviousWidth;
+    const startNextWidth = nextColumn ? columnWidth(tableLayout, nextColumn) : 0;
+    const pairWidth = startWidth + (previousColumn ? startPreviousWidth : startNextWidth);
     clearColumnHoverTimer();
     setActiveColumnKey(column.key);
     setActiveColumnEdge(edge);
@@ -975,6 +995,22 @@ export function App() {
         nextPreviousWidth = pairWidth - nextWidth;
         nextWidths[column.key] = nextWidth;
         nextWidths[previousColumn.key] = nextPreviousWidth;
+      } else if (edge === 'right' && nextColumn) {
+        let nextWidth = clampNumber(startWidth + delta, column.minWidth, column.maxWidth);
+        let nextNextWidth = pairWidth - nextWidth;
+
+        if (nextNextWidth < nextColumn.minWidth) {
+          nextNextWidth = nextColumn.minWidth;
+          nextWidth = pairWidth - nextNextWidth;
+        } else if (nextNextWidth > nextColumn.maxWidth) {
+          nextNextWidth = nextColumn.maxWidth;
+          nextWidth = pairWidth - nextNextWidth;
+        }
+
+        nextWidth = clampNumber(nextWidth, column.minWidth, column.maxWidth);
+        nextNextWidth = pairWidth - nextWidth;
+        nextWidths[column.key] = nextWidth;
+        nextWidths[nextColumn.key] = nextNextWidth;
       } else {
         nextWidths[column.key] = clampNumber(startWidth + delta, column.minWidth, column.maxWidth);
       }
@@ -1044,13 +1080,19 @@ export function App() {
     }),
     [ads, competitors]
   );
-  const tableWidth = useMemo(
+  const baseTableWidth = useMemo(
     () => tableColumns.reduce((sum, column) => sum + columnWidth(tableLayout, column), 0),
     [tableLayout.columnWidths]
   );
+  const tableFillWidth = Math.max(0, tableShellWidth - baseTableWidth);
+  const tableWidth = baseTableWidth + tableFillWidth;
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
   const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
+
+  function renderedColumnWidth(column: TableColumn) {
+    return columnWidth(tableLayout, column) + (column.key === 'geo' ? tableFillWidth : 0);
+  }
 
   function columnBoundaryClass(columnKey: string) {
     if (activeResizeColumnKey !== columnKey) return '';
@@ -1208,11 +1250,11 @@ export function App() {
       </section>
 
       <section className="table-section">
-        <div className="table-shell">
+        <div className="table-shell" ref={tableShellRef}>
           <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
             <colgroup>
               {tableColumns.map((column) => (
-                <col key={column.key} style={{ width: columnWidth(tableLayout, column) }} />
+                <col key={column.key} style={{ width: renderedColumnWidth(column) }} />
               ))}
             </colgroup>
             <thead>
@@ -1221,7 +1263,7 @@ export function App() {
                   <th
                     key={column.key}
                     className={columnBoundaryClass(column.key)}
-                    style={{ width: columnWidth(tableLayout, column) }}
+                    style={{ width: renderedColumnWidth(column) }}
                   >
                     <span className="column-title">{column.label}</span>
                     {renderColumnBoundaryHandle(column)}

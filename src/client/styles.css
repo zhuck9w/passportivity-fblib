@@ -310,7 +310,7 @@ select,
 .ad-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3;
   padding: 10px 12px;
   background: #edf2f5;
   color: #44525c;
@@ -359,6 +359,25 @@ select,
 
 .column-resize-handle.left-edge::after {
   left: 0;
+}
+
+.ad-table th:last-child,
+.ad-table td:last-child {
+  position: sticky;
+  right: 0;
+}
+
+.ad-table th:last-child {
+  z-index: 4;
+}
+
+.ad-table td:last-child {
+  z-index: 2;
+  background: #fff;
+}
+
+.ad-table tbody tr:hover td:last-child {
+  background: #fbfcfd;
 }
 
 .ad-table th.column-boundary-right-active,
