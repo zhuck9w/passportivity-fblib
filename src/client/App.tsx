@@ -106,7 +106,7 @@ function normalizeTableLayout(layout: TableLayout): TableLayout {
     columnWidths: Object.fromEntries(
       tableColumns.map((column) => [
         column.key,
-        clampNumber(layout.columnWidths[column.key] ?? column.width, column.minWidth, column.maxWidth)
+        Math.max(layout.columnWidths[column.key] ?? column.width, column.minWidth)
       ])
     ),
     rowHeights: layout.rowHeights
@@ -134,7 +134,7 @@ function loadTableLayout(): TableLayout {
     for (const column of tableColumns) {
       const width = parsed.columnWidths?.[column.key];
       if (Number.isFinite(width)) {
-        columnWidths[column.key] = clampNumber(Number(width), column.minWidth, column.maxWidth);
+        columnWidths[column.key] = Math.max(Number(width), column.minWidth);
       }
     }
 
@@ -855,6 +855,26 @@ export function App() {
     return () => resizeObserver.disconnect();
   }, []);
 
+  useLayoutEffect(() => {
+    if (!tableShellWidth) return;
+
+    setTableLayout((current) => {
+      const currentTableWidth = tableColumns.reduce((sum, column) => sum + columnWidth(current, column), 0);
+      const missingWidth = tableShellWidth - currentTableWidth;
+
+      if (missingWidth <= 0) return current;
+
+      const geoColumn = tableColumnByKey.geo;
+      return {
+        ...current,
+        columnWidths: {
+          ...current.columnWidths,
+          [geoColumn.key]: columnWidth(current, geoColumn) + missingWidth
+        }
+      };
+    });
+  }, [tableShellWidth, tableLayout.columnWidths]);
+
   useEffect(
     () => () => {
       clearColumnHoverTimer();
@@ -980,39 +1000,33 @@ export function App() {
       const nextWidths: Record<string, number> = {};
 
       if (edge === 'left' && previousColumn) {
-        let nextWidth = clampNumber(startWidth - delta, column.minWidth, column.maxWidth);
+        let nextWidth = clampNumber(startWidth - delta, column.minWidth, pairWidth - previousColumn.minWidth);
         let nextPreviousWidth = pairWidth - nextWidth;
 
         if (nextPreviousWidth < previousColumn.minWidth) {
           nextPreviousWidth = previousColumn.minWidth;
           nextWidth = pairWidth - nextPreviousWidth;
-        } else if (nextPreviousWidth > previousColumn.maxWidth) {
-          nextPreviousWidth = previousColumn.maxWidth;
-          nextWidth = pairWidth - nextPreviousWidth;
         }
 
-        nextWidth = clampNumber(nextWidth, column.minWidth, column.maxWidth);
+        nextWidth = clampNumber(nextWidth, column.minWidth, pairWidth - previousColumn.minWidth);
         nextPreviousWidth = pairWidth - nextWidth;
         nextWidths[column.key] = nextWidth;
         nextWidths[previousColumn.key] = nextPreviousWidth;
       } else if (edge === 'right' && nextColumn) {
-        let nextWidth = clampNumber(startWidth + delta, column.minWidth, column.maxWidth);
+        let nextWidth = clampNumber(startWidth + delta, column.minWidth, pairWidth - nextColumn.minWidth);
         let nextNextWidth = pairWidth - nextWidth;
 
         if (nextNextWidth < nextColumn.minWidth) {
           nextNextWidth = nextColumn.minWidth;
           nextWidth = pairWidth - nextNextWidth;
-        } else if (nextNextWidth > nextColumn.maxWidth) {
-          nextNextWidth = nextColumn.maxWidth;
-          nextWidth = pairWidth - nextNextWidth;
         }
 
-        nextWidth = clampNumber(nextWidth, column.minWidth, column.maxWidth);
+        nextWidth = clampNumber(nextWidth, column.minWidth, pairWidth - nextColumn.minWidth);
         nextNextWidth = pairWidth - nextWidth;
         nextWidths[column.key] = nextWidth;
         nextWidths[nextColumn.key] = nextNextWidth;
       } else {
-        nextWidths[column.key] = clampNumber(startWidth + delta, column.minWidth, column.maxWidth);
+        nextWidths[column.key] = Math.max(startWidth + delta, column.minWidth);
       }
 
       setTableLayout((current) => ({
@@ -1084,15 +1098,10 @@ export function App() {
     () => tableColumns.reduce((sum, column) => sum + columnWidth(tableLayout, column), 0),
     [tableLayout.columnWidths]
   );
-  const tableFillWidth = Math.max(0, tableShellWidth - baseTableWidth);
-  const tableWidth = baseTableWidth + tableFillWidth;
+  const tableWidth = baseTableWidth;
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
   const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
-
-  function renderedColumnWidth(column: TableColumn) {
-    return columnWidth(tableLayout, column) + (column.key === 'geo' ? tableFillWidth : 0);
-  }
 
   function columnBoundaryClass(columnKey: string) {
     if (activeResizeColumnKey !== columnKey) return '';
@@ -1128,17 +1137,10 @@ export function App() {
 
   function renderColumnBoundaryHandle(column: TableColumn) {
     const columnIndex = tableColumns.findIndex((candidate) => candidate.key === column.key);
-    const lastColumn = tableColumns[tableColumns.length - 1];
 
-    if (columnIndex === tableColumns.length - 1) {
-      return renderColumnResizeHandle(column, 'left', 'left');
-    }
+    if (columnIndex <= 0) return null;
 
-    if (columnIndex === tableColumns.length - 2) {
-      return renderColumnResizeHandle(lastColumn, 'left', 'right');
-    }
-
-    return renderColumnResizeHandle(column, 'right', 'right');
+    return renderColumnResizeHandle(column, 'left', 'left');
   }
 
   function renderRowResizeHandle(ad: Ad) {
@@ -1254,7 +1256,7 @@ export function App() {
           <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
             <colgroup>
               {tableColumns.map((column) => (
-                <col key={column.key} style={{ width: renderedColumnWidth(column) }} />
+                <col key={column.key} style={{ width: columnWidth(tableLayout, column) }} />
               ))}
             </colgroup>
             <thead>
@@ -1263,7 +1265,7 @@ export function App() {
                   <th
                     key={column.key}
                     className={columnBoundaryClass(column.key)}
-                    style={{ width: renderedColumnWidth(column) }}
+                    style={{ width: columnWidth(tableLayout, column) }}
                   >
                     <span className="column-title">{column.label}</span>
                     {renderColumnBoundaryHandle(column)}
