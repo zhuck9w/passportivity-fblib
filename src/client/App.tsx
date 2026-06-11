@@ -38,8 +38,6 @@ import {
   fetchAds,
   fetchCompetitors,
   fetchJob,
-  fetchLog,
-  fetchRuns,
   setAdHidden,
   startScrape,
   stopScrape,
@@ -833,8 +831,6 @@ export function App() {
   const columnHoverTimer = useRef<number | null>(null);
   const rowHoverTimer = useRef<number | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
-  const [runs, setRuns] = useState<Awaited<ReturnType<typeof fetchRuns>> | null>(null);
-  const [scraperLog, setScraperLog] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -842,16 +838,9 @@ export function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextCompetitors, nextAds, nextRuns, nextLog] = await Promise.all([
-        fetchCompetitors(),
-        fetchAds(filters),
-        fetchRuns(),
-        fetchLog('scraper', 80)
-      ]);
+      const [nextCompetitors, nextAds] = await Promise.all([fetchCompetitors(), fetchAds(filters)]);
       setCompetitors(nextCompetitors);
       setAds(nextAds);
-      setRuns(nextRuns);
-      setScraperLog(nextLog.lines);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
@@ -949,9 +938,8 @@ export function App() {
 
     const interval = window.setInterval(async () => {
       try {
-        const [nextJob, nextLog] = await Promise.all([fetchJob(job.run_id), fetchLog('scraper', 80)]);
+        const nextJob = await fetchJob(job.run_id);
         setJob(nextJob);
-        setScraperLog(nextLog.lines);
         if (nextJob.status !== 'running') {
           await refresh();
         }

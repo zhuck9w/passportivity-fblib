@@ -1,7 +1,15 @@
-import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
+import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot } from '../shared/types';
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+// Interface backend (competitors, ads, geo). Same-origin by default — proxied to the
+// interface server in dev (see vite.config.ts), same domain when deployed to Vercel.
+const API_BASE = import.meta.env.VITE_API_URL ?? '';
+
+// Scraper service (start/stop/status of scraping). Runs as a separate long-lived process,
+// so it lives on its own origin. Defaults to the local scraper port in dev.
+const SCRAPER_BASE = import.meta.env.VITE_SCRAPER_URL ?? 'http://localhost:4001';
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -16,6 +24,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+function api<T>(path: string, init?: RequestInit) {
+  return request<T>(`${API_BASE}${path}`, init);
+}
+
+function scraperApi<T>(path: string, init?: RequestInit) {
+  return request<T>(`${SCRAPER_BASE}${path}`, init);
 }
 
 export function fetchCompetitors() {
@@ -95,8 +111,10 @@ export function fetchAdLocations(ids: string[]) {
   });
 }
 
+// --- Scraper service (separate origin) ---
+
 export function startScrape(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
-  return api<ScrapeJobSnapshot>('/api/scrape', {
+  return scraperApi<ScrapeJobSnapshot>('/api/scrape', {
     method: 'POST',
     body: JSON.stringify({
       competitor_id: input.competitorId,
@@ -107,19 +125,9 @@ export function startScrape(input: { competitorId?: string; limit?: number; coll
 }
 
 export function fetchJob(runId: string) {
-  return api<ScrapeJobSnapshot>(`/api/jobs/${runId}`);
+  return scraperApi<ScrapeJobSnapshot>(`/api/jobs/${runId}`);
 }
 
 export function stopScrape(runId: string) {
-  return api<ScrapeJobSnapshot>(`/api/jobs/${runId}/stop`, { method: 'POST' });
-}
-
-export function fetchRuns() {
-  return api<{ persisted: Array<ScrapeRun & { competitors?: Pick<Competitor, 'name' | 'facebook_page_id'> }>; active: ScrapeJobSnapshot[] }>(
-    '/api/runs'
-  );
-}
-
-export function fetchLog(name: 'scraper' | 'server', lines = 120) {
-  return api<{ name: string; lines: string[] }>(`/api/logs/${name}?lines=${lines}`);
+  return scraperApi<ScrapeJobSnapshot>(`/api/jobs/${runId}/stop`, { method: 'POST' });
 }

@@ -1,8 +1,9 @@
 import cors from 'cors';
-import express, { type NextFunction, type Request, type Response } from 'express';
+import express from 'express';
 import { z } from 'zod';
 import { env } from './env';
-import { logServer, readLogTail } from './logger';
+import { asyncRoute, errorHandler, routeParam } from './httpUtils';
+import { logServer } from './logger';
 import {
   bulkCreateCompetitors,
   createCompetitor,
@@ -15,7 +16,6 @@ import {
   setAdHidden,
   updateCompetitor
 } from './repositories';
-import { scrapeJobManager } from './scrapeJobManager';
 
 const app = express();
 
@@ -44,45 +44,13 @@ const adLocationsSchema = z.object({
   ids: z.array(z.string().uuid()).max(500)
 });
 
-const scrapeStartSchema = z.object({
-  competitor_id: z.string().uuid().optional(),
-  limit: z.number().int().positive().max(500).optional(),
-  collect_carousels: z.boolean().optional()
-});
-
-function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    handler(req, res).catch(next);
-  };
-}
-
-function routeParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : (value ?? '');
-}
-
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    using_publishable_key_for_server: env.usingPublishableKeyForServer,
-    scraper_headless: env.scraperHeadless,
-    scraper_limit: env.scraperLimit,
-    scraper_collect_carousels: env.scraperCollectCarousels
+    service: 'interface',
+    using_publishable_key_for_server: env.usingPublishableKeyForServer
   });
 });
-
-app.get(
-  '/api/logs/:name',
-  asyncRoute(async (req, res) => {
-    const name = routeParam(req.params.name);
-    if (name !== 'scraper' && name !== 'server') {
-      res.status(404).json({ error: 'Unknown log name' });
-      return;
-    }
-
-    const rawLines = Number(req.query.lines ?? 200);
-    res.json({ name, lines: await readLogTail(name, Number.isFinite(rawLines) ? rawLines : 200) });
-  })
-);
 
 app.get(
   '/api/competitors',
@@ -163,59 +131,15 @@ app.patch(
 app.get(
   '/api/runs',
   asyncRoute(async (_req, res) => {
-    res.json({
-      persisted: await listScrapeRuns(),
-      active: scrapeJobManager.list()
-    });
+    res.json({ persisted: await listScrapeRuns() });
   })
 );
 
-app.post(
-  '/api/scrape',
-  asyncRoute(async (req, res) => {
-    const input = scrapeStartSchema.parse(req.body ?? {});
-    res.status(202).json(
-      await scrapeJobManager.start({
-        competitorId: input.competitor_id,
-        limit: input.limit,
-        collectCarousels: input.collect_carousels
-      })
-    );
-  })
-);
-
-app.get('/api/jobs/:runId', (req, res) => {
-  const job = scrapeJobManager.get(routeParam(req.params.runId));
-  if (!job) {
-    res.status(404).json({ error: 'Job not found' });
-    return;
-  }
-  res.json(job);
-});
-
-app.post('/api/jobs/:runId/stop', (req, res) => {
-  const job = scrapeJobManager.stop(routeParam(req.params.runId));
-  if (!job) {
-    res.status(404).json({ error: 'Job not found' });
-    return;
-  }
-  res.json(job);
-});
-
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  if (error instanceof z.ZodError) {
-    res.status(400).json({ error: 'Validation error', details: error.issues });
-    return;
-  }
-
-  const message = error instanceof Error ? error.message : String(error);
-  logServer('error', 'Request failed', { message });
-  res.status(500).json({ error: message });
-});
+app.use(errorHandler);
 
 app.listen(env.port, () => {
-  console.log(`API listening on http://localhost:${env.port}`);
-  logServer('info', 'API started', {
+  console.log(`Interface API listening on http://localhost:${env.port}`);
+  logServer('info', 'Interface API started', {
     port: env.port,
     using_publishable_key_for_server: env.usingPublishableKeyForServer
   });

@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "tsx watch src/server/index.ts",
+    "dev": "concurrently -n interface,scraper,client -c blue,magenta,green \"npm:dev:interface\" \"npm:dev:scraper\" \"npm:dev:client\"",
+    "dev:backend": "concurrently -n interface,scraper -c blue,magenta \"npm:dev:interface\" \"npm:dev:scraper\"",
+    "dev:interface": "tsx watch src/server/interface.ts",
+    "dev:scraper": "tsx watch src/server/scraperService.ts",
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",

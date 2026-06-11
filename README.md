@@ -5,7 +5,7 @@
 ## Что уже есть
 
 - Playwright-скрейпер с конфигом селекторов в `config/selectors.json`.
-- Локальный Express API на `http://localhost:4000`.
+- Два независимых backend-инстанса: интерфейсный API (`http://localhost:4000`) и сервис скрейпера (`http://localhost:4001`).
 - React/Vite дашборд на `http://localhost:5173`.
 - Supabase schema в `sql/schema.sql`.
 - Управление конкурентами: Page ID, название, включение/выключение сбора, скрытие объявлений из выдачи (иконка «глаз»).
@@ -14,6 +14,19 @@
 - Остановка running-сбора с сохранением уже успешно собранных объявлений.
 - Сохранение объявлений, вариаций, гео-видимости и HTML-превью.
 - Каждое объявление сохраняется отдельной строкой по `facebook_library_id`; текстовые дубли не склеиваются.
+
+## Архитектура (два бэкенда)
+
+Backend разделён на два независимых процесса, интегрированных через общую Supabase (прямых HTTP-вызовов между ними нет):
+
+- **Интерфейсный API** — `src/server/interface.ts`, порт `4000` (`PORT`).
+  Конкуренты, объявления, гео, статистика прогонов. Только чтение/запись в БД, без Playwright — может жить на Vercel (serverless).
+- **Сервис скрейпера** — `src/server/scraperService.ts`, порт `4001` (`SCRAPER_PORT`).
+  Запуск/остановка/статус сбора + сам Playwright + менеджер задач + логи скрейпера. Это долгоживущий процесс (минуты на сбор, headed-браузер, persistent-профиль), поэтому деплоится на отдельный сервер с диском, не на Vercel.
+
+Фронт ходит в оба бэкенда: всё, кроме сбора, — в интерфейсный API; `start/stop/статус` сбора — в сервис скрейпера (см. `VITE_API_URL` / `VITE_SCRAPER_URL` в `.env.example`). Скрейпер пишет собранные объявления в Supabase, интерфейсный API их оттуда отдаёт — поэтому после сбора дашборд просто перечитывает данные из БД.
+
+Общий код (`repositories.ts`, `supabase.ts`, `env.ts`, `adStatusReconciliation.ts`, `shared/types.ts`) импортируют оба процесса из одного репозитория.
 
 ## Supabase
 
@@ -80,41 +93,49 @@ npm.cmd install
 npx.cmd playwright install chromium
 ```
 
-Запустить backend отдельно:
+После разделения бэка запускаются **три** процесса: интерфейсный API, сервис скрейпера и фронт.
 
-```powershell
-npm.cmd run dev:server
-```
-
-Backend будет доступен здесь:
-
-```text
-http://localhost:4000
-http://localhost:4000/api/health
-```
-
-Запустить frontend отдельно во втором терминале:
-
-```powershell
-npm.cmd run dev:client
-```
-
-Frontend будет доступен здесь:
-
-```text
-http://localhost:5173
-```
-
-Запустить backend и frontend одной командой:
+Всё одной командой (рекомендуется):
 
 ```powershell
 npm.cmd run dev
 ```
 
+Поднимутся сразу три процесса (вывод помечен префиксами `interface` / `scraper` / `client`):
+
+```text
+http://localhost:4000   интерфейсный API   (npm run dev:interface)
+http://localhost:4001   сервис скрейпера   (npm run dev:scraper)
+http://localhost:5173   дашборд            (npm run dev:client)
+```
+
+Каждый процесс можно поднять отдельно (например, в разных терминалах):
+
+```powershell
+npm.cmd run dev:interface   # интерфейсный API на :4000
+npm.cmd run dev:scraper     # сервис скрейпера на :4001 (нужен для запуска сбора)
+npm.cmd run dev:client      # фронт на :5173
+```
+
+Только оба бэкенда, без фронта:
+
+```powershell
+npm.cmd run dev:backend
+```
+
+Проверка здоровья:
+
+```text
+http://localhost:4000/api/health   -> { "service": "interface", ... }
+http://localhost:4001/api/health   -> { "service": "scraper", ... }
+```
+
+Дашборд работает и без запущенного скрейпера (показывает уже собранные данные из Supabase), но кнопки «Собрать»/«Остановить» требуют живого сервиса скрейпера на `:4001`.
+
 Остановить процессы на текущих портах:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 4000,5173 -State Listen -ErrorAction SilentlyContinue |
+Get-NetTCPConnection -LocalPort 4000,4001,5173 -State Listen -ErrorAction SilentlyContinue |
   ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 ```
 
@@ -124,16 +145,10 @@ Get-NetTCPConnection -LocalPort 4000,5173 -State Listen -ErrorAction SilentlyCon
 http://localhost:5173
 ```
 
-API:
-
-```text
-http://localhost:4000/api/health
-```
-
-Остановить текущий сбор можно кнопкой `Остановить` в дашборде или API-запросом:
+Остановить текущий сбор можно кнопкой `Остановить` в дашборде или API-запросом к сервису скрейпера:
 
 ```powershell
-curl.exe -X POST http://localhost:4000/api/jobs/<run_id>/stop
+curl.exe -X POST http://localhost:4001/api/jobs/<run_id>/stop
 ```
 
 ## Facebook login profile
@@ -176,13 +191,11 @@ npm.cmd run login:facebook
 Get-Content .\logs\scraper.log -Tail 80 -Wait
 ```
 
-Или через API:
+Или через API сервиса скрейпера:
 
 ```text
-http://localhost:4000/api/logs/scraper?lines=80
+http://localhost:4001/api/logs/scraper?lines=80
 ```
-
-В дашборде справа также есть блок `Журнал`.
 
 ## Селекторы
 

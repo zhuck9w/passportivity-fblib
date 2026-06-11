@@ -43,6 +43,7 @@ if (!serverKey) {
 
 export const env = {
   port: readNumber('PORT', 4000),
+  scraperPort: readNumber('SCRAPER_PORT', 4001),
   supabaseUrl: readRequired('SUPABASE_URL'),
   supabasePublishableKey: readRequired('SUPABASE_PUBLISHABLE_KEY'),
   supabaseServerKey: serverKey,
