@@ -5,6 +5,7 @@ create table if not exists public.competitors (
   name text not null,
   facebook_page_id text not null unique,
   enabled boolean not null default true,
+  visible boolean not null default true,
   notes text,
   last_scraped_at timestamptz,
   created_at timestamptz not null default now(),
@@ -131,6 +132,7 @@ alter table public.scrape_runs drop constraint if exists scrape_runs_status_chec
 alter table public.scrape_runs add constraint scrape_runs_status_check
   check (status in ('pending', 'running', 'succeeded', 'failed', 'stopped'));
 
+alter table public.competitors add column if not exists visible boolean not null default true;
 alter table public.ads add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ad_variations add column if not exists media_items jsonb not null default '[]'::jsonb;
 alter table public.ads add column if not exists first_seen_scan_id uuid;

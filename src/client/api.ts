@@ -26,6 +26,7 @@ export function createCompetitor(input: {
   name: string;
   facebook_page_id: string;
   enabled: boolean;
+  visible?: boolean;
   notes?: string | null;
 }) {
   return api<Competitor>('/api/competitors', {
@@ -34,7 +35,29 @@ export function createCompetitor(input: {
   });
 }
 
-export function updateCompetitor(id: string, input: Partial<Pick<Competitor, 'name' | 'facebook_page_id' | 'enabled' | 'notes'>>) {
+export type BulkCompetitorInput = {
+  name: string;
+  facebook_page_id: string;
+  enabled?: boolean;
+  notes?: string | null;
+};
+
+export type BulkCompetitorResult = {
+  created: Competitor[];
+  errors: Array<{ index: number; name: string; facebook_page_id: string; message: string }>;
+};
+
+export function bulkCreateCompetitors(items: BulkCompetitorInput[]) {
+  return api<BulkCompetitorResult>('/api/competitors/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ items })
+  });
+}
+
+export function updateCompetitor(
+  id: string,
+  input: Partial<Pick<Competitor, 'name' | 'facebook_page_id' | 'enabled' | 'visible' | 'notes'>>
+) {
   return api<Competitor>(`/api/competitors/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(input)

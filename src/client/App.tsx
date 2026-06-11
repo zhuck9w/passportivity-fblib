@@ -3,6 +3,8 @@ import {
   CirclePause,
   Database,
   ExternalLink,
+  Eye,
+  EyeOff,
   Filter,
   Loader2,
   MapPinned,
@@ -28,6 +30,7 @@ import {
 } from 'react';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
+  bulkCreateCompetitors,
   createCompetitor,
   deleteCompetitor,
   fetchAd,
@@ -780,6 +783,37 @@ function cleanBodyTextForDisplay(value: string | null) {
   return result.join('\n').trim();
 }
 
+type ParsedCompetitorLine =
+  | { ok: true; raw: string; name: string; facebook_page_id: string; notes: string | null }
+  | { ok: false; raw: string; reason: string };
+
+function parseCompetitorLine(raw: string): ParsedCompetitorLine | null {
+  const line = raw.trim();
+  if (!line) return null;
+
+  const firstComma = line.indexOf(',');
+  if (firstComma === -1) {
+    return { ok: false, raw, reason: 'нужен формат «Название, ID»' };
+  }
+
+  const name = line.slice(0, firstComma).trim();
+  const rest = line.slice(firstComma + 1);
+  const secondComma = rest.indexOf(',');
+  const idPart = (secondComma === -1 ? rest : rest.slice(0, secondComma)).trim();
+  const notes = (secondComma === -1 ? '' : rest.slice(secondComma + 1).trim()) || null;
+  const facebook_page_id = idPart.replace(/\D/g, '');
+
+  if (!name) return { ok: false, raw, reason: 'пустое название' };
+  if (!facebook_page_id) return { ok: false, raw, reason: 'некорректный ID' };
+
+  return { ok: true, raw, name, facebook_page_id, notes };
+}
+
+function friendlyCompetitorError(message: string) {
+  if (/duplicate key|already exists|unique/i.test(message)) return 'уже добавлен (ID занят)';
+  return message;
+}
+
 export function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
@@ -1085,14 +1119,22 @@ export function App() {
     window.addEventListener('mouseup', handleMouseUp);
   }
 
+  const hiddenCompetitorIds = useMemo(
+    () => new Set(competitors.filter((competitor) => competitor.visible === false).map((competitor) => competitor.id)),
+    [competitors]
+  );
+  const visibleAds = useMemo(
+    () => ads.filter((ad) => !hiddenCompetitorIds.has(ad.competitor_id)),
+    [ads, hiddenCompetitorIds]
+  );
   const counters = useMemo(
     () => ({
       competitors: competitors.length,
       enabled: competitors.filter((competitor) => competitor.enabled).length,
-      ads: ads.length,
-      active: ads.filter((ad) => ad.status === 'active' || ad.status === 'new').length
+      ads: visibleAds.length,
+      active: visibleAds.filter((ad) => ad.status === 'active' || ad.status === 'new').length
     }),
-    [ads, competitors]
+    [visibleAds, competitors]
   );
   const baseTableWidth = useMemo(
     () => tableColumns.reduce((sum, column) => sum + columnWidth(tableLayout, column), 0),
@@ -1274,7 +1316,7 @@ export function App() {
               </tr>
             </thead>
             <tbody>
-              {ads.map((ad) => {
+              {visibleAds.map((ad) => {
                 const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
                 const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
 
@@ -1363,7 +1405,13 @@ export function App() {
               })}
             </tbody>
           </table>
-          {!ads.length && <div className="empty">Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.</div>}
+          {!visibleAds.length && (
+            <div className="empty">
+              {ads.length
+                ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
+                : 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'}
+            </div>
+          )}
         </div>
       </section>
 
@@ -1429,6 +1477,9 @@ function CompetitorsDialog({
   const [pageId, setPageId] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<{ added: number; problems: string[] } | null>(null);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -1441,6 +1492,52 @@ function CompetitorsDialog({
       onChanged();
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleBulkSubmit(event: FormEvent) {
+    event.preventDefault();
+    const parsed = bulkText
+      .split('\n')
+      .map(parseCompetitorLine)
+      .filter((line): line is ParsedCompetitorLine => line !== null);
+    const valid = parsed.filter((line): line is Extract<ParsedCompetitorLine, { ok: true }> => line.ok);
+    const invalid = parsed.filter((line): line is Extract<ParsedCompetitorLine, { ok: false }> => !line.ok);
+    const invalidProblems = invalid.map((line) => `«${line.raw.trim()}» — ${line.reason}`);
+
+    if (!valid.length) {
+      setBulkFeedback({ added: 0, problems: invalidProblems });
+      return;
+    }
+
+    setBulkSaving(true);
+    try {
+      const result = await bulkCreateCompetitors(
+        valid.map((line) => ({
+          name: line.name,
+          facebook_page_id: line.facebook_page_id,
+          enabled: true,
+          notes: line.notes
+        }))
+      );
+      const problems = [
+        ...invalidProblems,
+        ...result.errors.map(
+          (error) => `«${error.name}, ${error.facebook_page_id}» — ${friendlyCompetitorError(error.message)}`
+        )
+      ];
+      setBulkFeedback({ added: result.created.length, problems });
+      if (result.created.length) {
+        setBulkText('');
+        onChanged();
+      }
+    } catch (error) {
+      setBulkFeedback({
+        added: 0,
+        problems: [...invalidProblems, error instanceof Error ? error.message : String(error)]
+      });
+    } finally {
+      setBulkSaving(false);
     }
   }
 
@@ -1468,6 +1565,40 @@ function CompetitorsDialog({
           </button>
         </form>
 
+        <form className="competitor-bulk" onSubmit={(event) => void handleBulkSubmit(event)}>
+          <div className="competitor-bulk-head">
+            <strong>Массовое добавление</strong>
+            <span>Формат: «Название, ID, заметка» — по одному конкуренту на строку. Заметка необязательна.</span>
+          </div>
+          <textarea
+            value={bulkText}
+            onChange={(event) => setBulkText(event.target.value)}
+            placeholder={'Astons, 123456789, премиум-клиент\nAcme Realty, 987654321,'}
+            rows={4}
+          />
+          <div className="competitor-bulk-actions">
+            <button className="secondary-button" disabled={bulkSaving || !bulkText.trim()}>
+              <Plus size={16} />
+              Добавить списком
+            </button>
+            {bulkFeedback && (
+              <div className={`bulk-feedback ${bulkFeedback.problems.length ? 'warn' : 'ok'}`}>
+                <span>
+                  Добавлено: {bulkFeedback.added}
+                  {bulkFeedback.problems.length ? `, пропущено: ${bulkFeedback.problems.length}` : ''}
+                </span>
+                {bulkFeedback.problems.length > 0 && (
+                  <ul>
+                    {bulkFeedback.problems.map((problem, index) => (
+                      <li key={index}>{problem}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        </form>
+
         <div className="competitor-list">
           {competitors.map((competitor) => (
             <div className="competitor-row" key={competitor.id}>
@@ -1479,7 +1610,10 @@ function CompetitorsDialog({
                   {competitor.last_scraped_at ? new Date(competitor.last_scraped_at).toLocaleString('ru-RU') : 'еще не было'}
                 </small>
               </div>
-              <label className="switch">
+              <label
+                className="switch"
+                title={competitor.enabled ? 'Участвует в сборе — отключить' : 'Не участвует в сборе — включить'}
+              >
                 <input
                   type="checkbox"
                   checked={competitor.enabled}
@@ -1489,6 +1623,21 @@ function CompetitorsDialog({
                 />
                 <span />
               </label>
+              <button
+                className={`icon-button ${competitor.visible === false ? 'visibility-off' : ''}`.trim()}
+                onClick={() =>
+                  updateCompetitor(competitor.id, { visible: competitor.visible === false })
+                    .then(onChanged)
+                    .catch(console.error)
+                }
+                title={
+                  competitor.visible === false
+                    ? 'Объявления скрыты из выдачи — показать'
+                    : 'Объявления видны в выдаче — скрыть'
+                }
+              >
+                {competitor.visible === false ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
               <button className="icon-button" onClick={() => onScrape(competitor.id)} title="Собрать этого конкурента">
                 <Play size={17} />
               </button>

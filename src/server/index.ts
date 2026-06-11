@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from './env';
 import { logServer, readLogTail } from './logger';
 import {
+  bulkCreateCompetitors,
   createCompetitor,
   deleteCompetitor,
   getAd,
@@ -23,10 +24,15 @@ const competitorCreateSchema = z.object({
   name: z.string().trim().min(1),
   facebook_page_id: z.string().trim().regex(/^\d+$/),
   enabled: z.boolean().optional(),
+  visible: z.boolean().optional(),
   notes: z.string().trim().nullable().optional()
 });
 
 const competitorUpdateSchema = competitorCreateSchema.partial();
+
+const competitorBulkSchema = z.object({
+  items: z.array(competitorCreateSchema).min(1).max(500)
+});
 
 const scrapeStartSchema = z.object({
   competitor_id: z.string().uuid().optional(),
@@ -80,6 +86,14 @@ app.post(
   asyncRoute(async (req, res) => {
     const input = competitorCreateSchema.parse(req.body);
     res.status(201).json(await createCompetitor(input));
+  })
+);
+
+app.post(
+  '/api/competitors/bulk',
+  asyncRoute(async (req, res) => {
+    const { items } = competitorBulkSchema.parse(req.body);
+    res.status(201).json(await bulkCreateCompetitors(items));
   })
 );
 

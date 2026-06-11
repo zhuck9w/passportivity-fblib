@@ -5,6 +5,7 @@ export type Competitor = {
   name: string;
   facebook_page_id: string;
   enabled: boolean;
+  visible: boolean;
   notes: string | null;
   last_scraped_at: string | null;
   created_at: string;

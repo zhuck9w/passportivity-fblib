@@ -60,9 +60,32 @@ export async function createCompetitor(input: {
   return throwIfError<Competitor>(result);
 }
 
+export async function bulkCreateCompetitors(
+  items: Array<{ name: string; facebook_page_id: string; enabled?: boolean; notes?: string | null }>
+) {
+  const created: Competitor[] = [];
+  const errors: Array<{ index: number; name: string; facebook_page_id: string; message: string }> = [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    try {
+      created.push(await createCompetitor(item));
+    } catch (error) {
+      errors.push({
+        index,
+        name: item.name,
+        facebook_page_id: item.facebook_page_id,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  return { created, errors };
+}
+
 export async function updateCompetitor(
   id: string,
-  input: Partial<Pick<Competitor, 'name' | 'facebook_page_id' | 'enabled' | 'notes'>>
+  input: Partial<Pick<Competitor, 'name' | 'facebook_page_id' | 'enabled' | 'visible' | 'notes'>>
 ) {
   const result = await supabase
     .from('competitors')
