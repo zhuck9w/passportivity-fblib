@@ -381,6 +381,71 @@ select,
   padding: 0;
 }
 
+/* Excel-style frozen columns: cells up to the pinned boundary stick to the left edge. */
+.ad-table th.col-pinned {
+  z-index: 5;
+  background: #edf2f5;
+}
+
+.ad-table td.col-pinned {
+  position: sticky;
+  z-index: 2;
+  background: #fff;
+}
+
+.ad-table th.col-pinned-last,
+.ad-table td.col-pinned-last {
+  box-shadow: inset -2px 0 0 #9fb0ba;
+}
+
+.ad-table tbody tr:hover td.col-pinned {
+  background: #fbfcfd;
+}
+
+.ad-table tbody tr.row-hidden td.col-pinned {
+  background: #fbf4f3;
+}
+
+.ad-table tbody tr.row-hidden:hover td.col-pinned {
+  background: #f7ebe9;
+}
+
+.pin-button {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: #dde7ee;
+  color: #44525c;
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease;
+}
+
+.ad-table th:hover .pin-button,
+.pin-button:focus-visible {
+  opacity: 1;
+}
+
+.pin-button:hover {
+  background: #c9d9e4;
+}
+
+.pin-button.active {
+  opacity: 1;
+  background: #1769e0;
+  color: #fff;
+}
+
 .control-col .control-cell {
   display: flex;
   align-items: flex-start;
@@ -455,12 +520,14 @@ select,
 .table-column-resizing,
 .table-column-resizing * {
   cursor: col-resize !important;
+  -webkit-user-select: none;
   user-select: none;
 }
 
 .table-row-resizing,
 .table-row-resizing * {
   cursor: row-resize !important;
+  -webkit-user-select: none;
   user-select: none;
 }
 

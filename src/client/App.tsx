@@ -8,6 +8,8 @@ import {
   Filter,
   Loader2,
   MapPinned,
+  Pin,
+  PinOff,
   Play,
   Plus,
   RefreshCw,
@@ -65,6 +67,7 @@ type ColumnResizeEdge = 'left' | 'right';
 type TableLayout = {
   columnWidths: Record<string, number>;
   rowHeights: Record<string, number>;
+  pinnedColumnKey: string | null;
 };
 
 const tableLayoutStorageKey = 'ad-library-table-layout-v2';
@@ -99,6 +102,9 @@ const tableColumnByKey = Object.fromEntries(tableColumns.map((column) => [column
   TableColumn
 >;
 
+// Columns from the first one through body_text can act as a freeze boundary (Excel-style).
+const pinnableMaxColumnIndex = tableColumns.findIndex((column) => column.key === 'body_text');
+
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -115,14 +121,16 @@ function normalizeTableLayout(layout: TableLayout): TableLayout {
         Math.max(layout.columnWidths[column.key] ?? column.width, column.minWidth)
       ])
     ),
-    rowHeights: layout.rowHeights
+    rowHeights: layout.rowHeights,
+    pinnedColumnKey: layout.pinnedColumnKey ?? null
   };
 }
 
 function defaultTableLayout(): TableLayout {
   return {
     columnWidths: Object.fromEntries(tableColumns.map((column) => [column.key, column.width])),
-    rowHeights: {}
+    rowHeights: {},
+    pinnedColumnKey: null
   };
 }
 
@@ -150,7 +158,14 @@ function loadTableLayout(): TableLayout {
       }
     }
 
-    return { columnWidths, rowHeights };
+    const pinnedColumnKey =
+      typeof parsed.pinnedColumnKey === 'string' &&
+      tableColumns.findIndex((column) => column.key === parsed.pinnedColumnKey) >= 0 &&
+      tableColumns.findIndex((column) => column.key === parsed.pinnedColumnKey) <= pinnableMaxColumnIndex
+        ? parsed.pinnedColumnKey
+        : null;
+
+    return { columnWidths, rowHeights, pinnedColumnKey };
   } catch {
     return fallback;
   }
@@ -1164,6 +1179,43 @@ export function App() {
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
   const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
+  const pinnedColumnKey = tableLayout.pinnedColumnKey;
+  const pinnedColumnIndex = pinnedColumnKey
+    ? tableColumns.findIndex((column) => column.key === pinnedColumnKey)
+    : -1;
+  const pinnedLeftOffsets = useMemo(() => {
+    const offsets: Record<string, number> = {};
+    let left = controlColumnWidth;
+    for (let index = 0; index <= pinnedColumnIndex; index += 1) {
+      offsets[tableColumns[index].key] = left;
+      left += columnWidth(tableLayout, tableColumns[index]);
+    }
+    return offsets;
+  }, [pinnedColumnIndex, tableLayout.columnWidths]);
+
+  function pinnedColumnClass(columnKey: string) {
+    if (pinnedColumnIndex < 0) return '';
+    const index = tableColumns.findIndex((column) => column.key === columnKey);
+    if (index < 0 || index > pinnedColumnIndex) return '';
+    return index === pinnedColumnIndex ? 'col-pinned col-pinned-last' : 'col-pinned';
+  }
+
+  function pinnedColumnStyle(columnKey: string): CSSProperties | undefined {
+    const left = pinnedLeftOffsets[columnKey];
+    return left === undefined ? undefined : { left };
+  }
+
+  function pinnableCellProps(columnKey: string) {
+    const className = [columnBoundaryClass(columnKey), pinnedColumnClass(columnKey)].filter(Boolean).join(' ');
+    return { className: className || undefined, style: pinnedColumnStyle(columnKey) };
+  }
+
+  function togglePinnedColumn(columnKey: string) {
+    setTableLayout((current) => ({
+      ...current,
+      pinnedColumnKey: current.pinnedColumnKey === columnKey ? null : columnKey
+    }));
+  }
 
   function columnBoundaryClass(columnKey: string) {
     if (activeResizeColumnKey !== columnKey) return '';
@@ -1324,6 +1376,8 @@ export function App() {
         </label>
         <select
           value={filters.competitorId}
+          title="Фильтр по конкуренту"
+          aria-label="Фильтр по конкуренту"
           onChange={(event) => setFilters((current) => ({ ...current, competitorId: event.target.value }))}
         >
           <option value="">Все конкуренты</option>
@@ -1335,6 +1389,8 @@ export function App() {
         </select>
         <select
           value={filters.status}
+          title="Фильтр по статусу"
+          aria-label="Фильтр по статусу"
           onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
         >
           <option value="">Любой статус</option>
@@ -1346,6 +1402,8 @@ export function App() {
         </select>
         <select
           value={filters.platform}
+          title="Фильтр по платформе"
+          aria-label="Фильтр по платформе"
           onChange={(event) => setFilters((current) => ({ ...current, platform: event.target.value }))}
         >
           <option value="">Все платформы</option>
@@ -1367,7 +1425,10 @@ export function App() {
             </colgroup>
             <thead>
               <tr>
-                <th className="control-col" style={{ width: controlColumnWidth }}>
+                <th
+                  className={`control-col ${pinnedColumnIndex >= 0 ? 'col-pinned' : ''}`.trim()}
+                  style={pinnedColumnIndex >= 0 ? { width: controlColumnWidth, left: 0 } : { width: controlColumnWidth }}
+                >
                   <button
                     type="button"
                     className={`control-toggle ${revealHidden ? 'is-revealing' : ''}`.trim()}
@@ -1381,13 +1442,30 @@ export function App() {
                     {revealHidden ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </th>
-                {tableColumns.map((column) => (
+                {tableColumns.map((column, columnIndex) => (
                   <th
                     key={column.key}
-                    className={columnBoundaryClass(column.key)}
-                    style={{ width: columnWidth(tableLayout, column) }}
+                    className={
+                      [columnBoundaryClass(column.key), pinnedColumnClass(column.key)].filter(Boolean).join(' ') ||
+                      undefined
+                    }
+                    style={{ width: columnWidth(tableLayout, column), ...pinnedColumnStyle(column.key) }}
                   >
                     <span className="column-title">{column.label}</span>
+                    {columnIndex <= pinnableMaxColumnIndex && (
+                      <button
+                        type="button"
+                        className={`pin-button ${pinnedColumnKey === column.key ? 'active' : ''}`.trim()}
+                        onClick={() => togglePinnedColumn(column.key)}
+                        title={
+                          pinnedColumnKey === column.key
+                            ? 'Открепить столбцы'
+                            : `Закрепить столбцы по ${column.label} включительно`
+                        }
+                      >
+                        {pinnedColumnKey === column.key ? <PinOff size={13} /> : <Pin size={13} />}
+                      </button>
+                    )}
                     {renderColumnBoundaryHandle(column)}
                   </th>
                 ))}
@@ -1406,21 +1484,24 @@ export function App() {
                       .join(' ')}
                     style={rowStyle}
                   >
-                    <td className="control-col">
+                    <td
+                      className={`control-col ${pinnedColumnIndex >= 0 ? 'col-pinned' : ''}`.trim()}
+                      style={pinnedColumnIndex >= 0 ? { left: 0 } : undefined}
+                    >
                       <div className="cell-content control-cell">{renderAdHideButton(ad)}</div>
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('ad_archive_id')}>
+                    <td {...pinnableCellProps('ad_archive_id')}>
                       <div className="cell-content mono">{ad.facebook_library_id}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.ad_archive_id)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('company_name')}>
+                    <td {...pinnableCellProps('company_name')}>
                       <div className="cell-content">{ad.competitors?.name ?? ad.competitor_id}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.company_name)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('preview')}>
+                    <td {...pinnableCellProps('preview')}>
                       <div className="cell-content">
                         <PreviewThumb
                           ad={ad}
@@ -1431,14 +1512,14 @@ export function App() {
                       {renderColumnBoundaryHandle(tableColumnByKey.preview)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('status')}>
+                    <td {...pinnableCellProps('status')}>
                       <div className="cell-content">
                         <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
                       </div>
                       {renderColumnBoundaryHandle(tableColumnByKey.status)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('link_url')}>
+                    <td {...pinnableCellProps('link_url')}>
                       <div className="cell-content">
                         <a className="table-link" href={directAdUrl(ad)} target="_blank" rel="noreferrer">
                       ссылка
@@ -1448,27 +1529,27 @@ export function App() {
                       {renderColumnBoundaryHandle(tableColumnByKey.link_url)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('start_day')}>
+                    <td {...pinnableCellProps('start_day')}>
                       <div className="cell-content">{ad.start_date_text ?? ''}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.start_day)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('stop_day')}>
+                    <td {...pinnableCellProps('stop_day')}>
                       <div className="cell-content">{stopDay(ad)}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.stop_day)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('days_active')}>
+                    <td {...pinnableCellProps('days_active')}>
                       <div className="cell-content number-cell">{daysActive(ad)}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.days_active)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('cta')}>
+                    <td {...pinnableCellProps('cta')}>
                       <div className="cell-content">{ad.cta ?? ''}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.cta)}
                       {renderRowResizeHandle(ad)}
                     </td>
-                    <td className={columnBoundaryClass('body_text')}>
+                    <td {...pinnableCellProps('body_text')}>
                       <div className="cell-content body-cell">{getAdBodyText(ad)}</div>
                       {renderColumnBoundaryHandle(tableColumnByKey.body_text)}
                       {renderRowResizeHandle(ad)}
