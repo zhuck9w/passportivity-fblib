@@ -94,9 +94,13 @@ app.delete(
 app.get(
   '/api/ads',
   asyncRoute(async (req, res) => {
+    const competitorIds = String(req.query.competitor_ids ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
     res.json(
       await listAds({
-        competitorId: String(req.query.competitor_id ?? '') || undefined,
+        competitorIds: competitorIds.length ? competitorIds : undefined,
         status: String(req.query.status ?? '') || undefined,
         platform: String(req.query.platform ?? '') || undefined,
         q: String(req.query.q ?? '') || undefined

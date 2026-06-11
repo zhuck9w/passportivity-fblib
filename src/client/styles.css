@@ -284,6 +284,141 @@ select,
   min-width: 160px;
 }
 
+.multi-select {
+  position: relative;
+}
+
+.multi-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 38px;
+  min-width: 190px;
+  border: 1px solid #d7dee2;
+  border-radius: 6px;
+  background: #fff;
+  color: #172026;
+  padding: 0 10px;
+}
+
+.multi-select-trigger:hover {
+  border-color: #9fb0ba;
+}
+
+.multi-select-trigger.has-value {
+  border-color: #1769e0;
+  color: #1255b5;
+}
+
+.multi-select-trigger svg {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.multi-select-trigger svg.flip {
+  transform: rotate(180deg);
+}
+
+.multi-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 280px;
+  display: grid;
+  background: #fff;
+  border: 1px solid #d7dee2;
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+}
+
+.multi-select-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f3;
+  color: #64727b;
+}
+
+.multi-select-search input {
+  border: 0;
+  outline: 0;
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+}
+
+.multi-select-actions {
+  display: flex;
+  gap: 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf1f3;
+}
+
+.multi-select-actions button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  color: #1769e0;
+}
+
+.multi-select-actions button:hover {
+  text-decoration: underline;
+}
+
+.multi-select-actions button:disabled {
+  color: #93a3ad;
+  cursor: default;
+  text-decoration: none;
+}
+
+.multi-select-list {
+  max-height: 280px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.multi-select-option:hover {
+  background: #f3f7f9;
+}
+
+.multi-select-option input {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  accent-color: #1769e0;
+}
+
+.multi-select-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-empty {
+  padding: 12px;
+  color: #586670;
+  font-size: 13px;
+}
+
 .sort-toggle {
   display: inline-flex;
   height: 38px;

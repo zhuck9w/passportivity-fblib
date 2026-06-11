@@ -1,5 +1,6 @@
 import {
   CheckCircle2,
+  ChevronDown,
   CirclePause,
   Database,
   ExternalLink,
@@ -48,11 +49,36 @@ import {
 } from './api';
 
 type Filters = {
-  competitorId: string;
+  competitorIds: string[];
   status: string;
   platform: string;
   q: string;
 };
+
+const filtersStorageKey = 'ad-library-filters-v1';
+
+function loadFilters(): Filters {
+  const fallback: Filters = { competitorIds: [], status: '', platform: '', q: '' };
+  if (typeof window === 'undefined') return fallback;
+
+  try {
+    const raw = window.localStorage.getItem(filtersStorageKey);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<Filters> & { competitorId?: string };
+    return {
+      competitorIds: Array.isArray(parsed.competitorIds)
+        ? parsed.competitorIds.filter((id): id is string => typeof id === 'string')
+        : parsed.competitorId
+          ? [parsed.competitorId]
+          : [],
+      status: typeof parsed.status === 'string' ? parsed.status : '',
+      platform: typeof parsed.platform === 'string' ? parsed.platform : '',
+      q: typeof parsed.q === 'string' ? parsed.q : ''
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 type TableColumn = {
   key: string;
@@ -841,7 +867,7 @@ export function App() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [previewAd, setPreviewAd] = useState<Ad | null>(null);
   const [geoAd, setGeoAd] = useState<Ad | null>(null);
-  const [filters, setFilters] = useState<Filters>({ competitorId: '', status: '', platform: '', q: '' });
+  const [filters, setFilters] = useState<Filters>(() => loadFilters());
   const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
   const [collectCarousels, setCollectCarousels] = useState(true);
@@ -875,14 +901,30 @@ export function App() {
     }
   }
 
+  const competitorIdsKey = filters.competitorIds.join(',');
+
   useEffect(() => {
     void refresh();
-  }, [filters.competitorId, filters.status, filters.platform]);
+  }, [competitorIdsKey, filters.status, filters.platform]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), 350);
     return () => window.clearTimeout(timer);
   }, [filters.q]);
+
+  useEffect(() => {
+    window.localStorage.setItem(filtersStorageKey, JSON.stringify(filters));
+  }, [filters]);
+
+  // Drop selected competitor ids that no longer exist (e.g. deleted competitors).
+  useEffect(() => {
+    if (!competitors.length || !filters.competitorIds.length) return;
+    const existing = new Set(competitors.map((competitor) => competitor.id));
+    const pruned = filters.competitorIds.filter((id) => existing.has(id));
+    if (pruned.length !== filters.competitorIds.length) {
+      setFilters((current) => ({ ...current, competitorIds: pruned }));
+    }
+  }, [competitors, competitorIdsKey]);
 
   useEffect(() => {
     saveTableLayout(tableLayout);
@@ -1396,19 +1438,11 @@ export function App() {
             placeholder="Поиск по body_text"
           />
         </label>
-        <select
-          value={filters.competitorId}
-          title="Фильтр по конкуренту"
-          aria-label="Фильтр по конкуренту"
-          onChange={(event) => setFilters((current) => ({ ...current, competitorId: event.target.value }))}
-        >
-          <option value="">Все конкуренты</option>
-          {competitors.map((competitor) => (
-            <option key={competitor.id} value={competitor.id}>
-              {competitor.name}
-            </option>
-          ))}
-        </select>
+        <CompetitorMultiSelect
+          competitors={competitors}
+          selectedIds={filters.competitorIds}
+          onChange={(competitorIds) => setFilters((current) => ({ ...current, competitorIds }))}
+        />
         <select
           value={filters.status}
           title="Фильтр по статусу"
@@ -1640,6 +1674,118 @@ export function App() {
       {previewAd && <PreviewModal ad={previewAd} onClose={() => setPreviewAd(null)} />}
       {geoAd && <GeoDrawer ad={geoAd} onClose={() => setGeoAd(null)} />}
     </main>
+  );
+}
+
+function CompetitorMultiSelect({
+  competitors,
+  selectedIds,
+  onChange
+}: {
+  competitors: Competitor[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) setSearch('');
+  }, [open]);
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const matches = normalizedSearch
+    ? competitors.filter(
+        (competitor) =>
+          competitor.name.toLowerCase().includes(normalizedSearch) ||
+          competitor.facebook_page_id.includes(normalizedSearch)
+      )
+    : competitors;
+  const selected = new Set(selectedIds);
+  const label = !selectedIds.length
+    ? 'Все конкуренты'
+    : selectedIds.length === 1
+      ? (competitors.find((competitor) => competitor.id === selectedIds[0])?.name ?? 'Конкуренты: 1')
+      : `Конкуренты: ${selectedIds.length}`;
+
+  function toggleCompetitor(id: string) {
+    onChange(selected.has(id) ? selectedIds.filter((value) => value !== id) : [...selectedIds, id]);
+  }
+
+  function selectAllVisible() {
+    const ids = new Set(selectedIds);
+    for (const competitor of matches) ids.add(competitor.id);
+    onChange(Array.from(ids));
+  }
+
+  return (
+    <div className="multi-select" ref={rootRef}>
+      <button
+        type="button"
+        className={`multi-select-trigger ${selectedIds.length ? 'has-value' : ''}`.trim()}
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open ? 'true' : 'false'}
+        aria-haspopup="dialog"
+        title="Фильтр по конкурентам"
+      >
+        <span className="multi-select-label">{label}</span>
+        <ChevronDown size={16} className={open ? 'flip' : ''} />
+      </button>
+      {open && (
+        <div className="multi-select-panel">
+          <label className="multi-select-search">
+            <Search size={14} />
+            <input
+              autoFocus
+              value={search}
+              aria-label="Поиск конкурента"
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Поиск конкурента"
+            />
+          </label>
+          <div className="multi-select-actions">
+            <button type="button" onClick={selectAllVisible} disabled={!matches.length}>
+              Выбрать все
+            </button>
+            <button type="button" onClick={() => onChange([])} disabled={!selectedIds.length}>
+              Сбросить
+            </button>
+          </div>
+          <div className="multi-select-list" role="group" aria-label="Конкуренты">
+            {matches.map((competitor) => (
+              <label key={competitor.id} className="multi-select-option">
+                <input
+                  type="checkbox"
+                  checked={selected.has(competitor.id)}
+                  onChange={() => toggleCompetitor(competitor.id)}
+                />
+                <span className="multi-select-option-name">{competitor.name}</span>
+              </label>
+            ))}
+            {!matches.length && <div className="multi-select-empty">Ничего не найдено</div>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

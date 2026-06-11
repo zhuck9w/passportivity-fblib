@@ -84,9 +84,9 @@ export function deleteCompetitor(id: string) {
   return api<void>(`/api/competitors/${id}`, { method: 'DELETE' });
 }
 
-export function fetchAds(filters: { competitorId?: string; status?: string; platform?: string; q?: string }) {
+export function fetchAds(filters: { competitorIds?: string[]; status?: string; platform?: string; q?: string }) {
   const params = new URLSearchParams();
-  if (filters.competitorId) params.set('competitor_id', filters.competitorId);
+  if (filters.competitorIds?.length) params.set('competitor_ids', filters.competitorIds.join(','));
   if (filters.status) params.set('status', filters.status);
   if (filters.platform) params.set('platform', filters.platform);
   if (filters.q) params.set('q', filters.q);

@@ -290,7 +290,7 @@ export async function finishCompetitorScan(input: {
 }
 
 export async function listAds(filters: {
-  competitorId?: string;
+  competitorIds?: string[];
   status?: string;
   platform?: string;
   q?: string;
@@ -301,7 +301,7 @@ export async function listAds(filters: {
     .order('last_seen_at', { ascending: false })
     .limit(250);
 
-  if (filters.competitorId) query = query.eq('competitor_id', filters.competitorId);
+  if (filters.competitorIds?.length) query = query.in('competitor_id', filters.competitorIds);
   if (filters.status === 'active') query = query.in('status', ['active', 'new']);
   else if (filters.status) query = query.eq('status', filters.status);
   if (filters.platform) query = query.contains('platforms', [filters.platform]);
