@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { adAiAssessmentKeys, type AdAiAssessment, type AdMediaItem } from '../shared/types';
 import { env } from './env';
+import { proxiedFetch } from './proxy';
 
 const promptsPath = path.resolve(process.cwd(), 'config', 'aiPrompts.json');
 const maxFieldLength = 300;
@@ -108,7 +109,7 @@ async function callOpenAi(body: Record<string, unknown>) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await proxiedFetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -137,7 +138,7 @@ async function downloadImageAsDataUrl(url: string) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
   try {
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       signal: controller.signal,
       headers: {
         'User-Agent':

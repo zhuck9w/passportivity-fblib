@@ -57,16 +57,20 @@ import {
 } from './api';
 import { type XlsxColumn, type XlsxRow, exportToXlsx } from './excelExport';
 
+type DaysActiveOp = '>' | '<' | '=';
+
 type Filters = {
   competitorIds: string[];
   status: string;
   q: string;
+  daysActiveOp: DaysActiveOp | '';
+  daysActiveValue: string;
 };
 
 const filtersStorageKey = 'ad-library-filters-v1';
 
 function loadFilters(): Filters {
-  const fallback: Filters = { competitorIds: [], status: '', q: '' };
+  const fallback: Filters = { competitorIds: [], status: '', q: '', daysActiveOp: '', daysActiveValue: '' };
   if (typeof window === 'undefined') return fallback;
 
   try {
@@ -80,7 +84,12 @@ function loadFilters(): Filters {
           ? [parsed.competitorId]
           : [],
       status: typeof parsed.status === 'string' ? parsed.status : '',
-      q: typeof parsed.q === 'string' ? parsed.q : ''
+      q: typeof parsed.q === 'string' ? parsed.q : '',
+      daysActiveOp:
+        parsed.daysActiveOp === '>' || parsed.daysActiveOp === '<' || parsed.daysActiveOp === '='
+          ? parsed.daysActiveOp
+          : '',
+      daysActiveValue: typeof parsed.daysActiveValue === 'string' ? parsed.daysActiveValue : ''
     };
   } catch {
     return fallback;
@@ -704,15 +713,22 @@ function parseRuDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function daysActive(ad: Ad) {
-  if (ad.status === 'stopped') return '';
+// Number of days an ad has been running, or null when it can't be computed (stopped ads,
+// or no parseable start date). Shared by the days_active column and the days_active filter.
+function daysActiveCount(ad: Ad): number | null {
+  if (ad.status === 'stopped') return null;
 
   const start = parseRuDate(ad.start_date_text);
-  if (!start) return '';
+  if (!start) return null;
 
   const stop = ad.status === 'active' || ad.status === 'new' ? new Date() : parseRuDate(ad.end_date_text) ?? new Date();
   const diff = stop.getTime() - start.getTime();
-  return Math.max(0, Math.ceil(diff / 86_400_000)).toString();
+  return Math.max(0, Math.ceil(diff / 86_400_000));
+}
+
+function daysActive(ad: Ad) {
+  const count = daysActiveCount(ad);
+  return count === null ? '' : count.toString();
 }
 
 function stopDay(ad: Ad) {
@@ -1383,7 +1399,25 @@ export function App() {
   );
   const visibleAds = useMemo(() => competitorVisibleAds.filter((ad) => !ad.hidden), [competitorVisibleAds]);
   const hiddenCount = competitorVisibleAds.length - visibleAds.length;
-  const renderedAds = revealHidden ? competitorVisibleAds : visibleAds;
+  const revealedAds = revealHidden ? competitorVisibleAds : visibleAds;
+  // Client-side "days active" filter (the value is computed in the browser, not on the server):
+  // active only when an operator and a finite number are both set. Ads without a computable
+  // days_active value (stopped / no start date) can't satisfy a numeric comparison, so they drop.
+  const daysActiveFilter = useMemo(() => {
+    const value = Number(filters.daysActiveValue);
+    if (!filters.daysActiveOp || filters.daysActiveValue.trim() === '' || !Number.isFinite(value)) return null;
+    return { op: filters.daysActiveOp, value };
+  }, [filters.daysActiveOp, filters.daysActiveValue]);
+  const renderedAds = useMemo(() => {
+    if (!daysActiveFilter) return revealedAds;
+    return revealedAds.filter((ad) => {
+      const count = daysActiveCount(ad);
+      if (count === null) return false;
+      if (daysActiveFilter.op === '>') return count > daysActiveFilter.value;
+      if (daysActiveFilter.op === '<') return count < daysActiveFilter.value;
+      return count === daysActiveFilter.value;
+    });
+  }, [revealedAds, daysActiveFilter]);
   // "NEW сверху": stable partition — all new ads first (regardless of company), order inside
   // each group stays as fetched. With no new ads this is a no-op.
   const sortedAds = useMemo(() => {
@@ -1891,6 +1925,33 @@ export function App() {
             <option value="inactive">Inactive</option>
             <option value="unknown">Неизвестно</option>
           </select>
+          <div className="days-active-filter" role="group" aria-label="Фильтр по дням активности">
+            <select
+              className="days-active-op"
+              value={filters.daysActiveOp}
+              title="Фильтр по дням активности (days active)"
+              aria-label="Условие фильтра по дням активности"
+              onChange={(event) =>
+                setFilters((current) => ({ ...current, daysActiveOp: event.target.value as DaysActiveOp | '' }))
+              }
+            >
+              <option value="">Days active</option>
+              <option value=">">Больше (&gt;)</option>
+              <option value="<">Меньше (&lt;)</option>
+              <option value="=">Равно (=)</option>
+            </select>
+            <input
+              type="number"
+              min="0"
+              inputMode="numeric"
+              className="days-active-value"
+              value={filters.daysActiveValue}
+              disabled={!filters.daysActiveOp}
+              placeholder="дней"
+              aria-label="Количество дней активности"
+              onChange={(event) => setFilters((current) => ({ ...current, daysActiveValue: event.target.value }))}
+            />
+          </div>
           <div className="sort-toggle" role="group" aria-label="Порядок строк">
             <button
               type="button"
@@ -2027,7 +2088,9 @@ export function App() {
                 ? 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'
                 : competitorVisibleAds.length === 0
                   ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
-                  : 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'}
+                  : revealedAds.length === 0
+                    ? 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'
+                    : 'Нет объявлений, подходящих под фильтр по дням активности.'}
             </div>
           )}
         </div>

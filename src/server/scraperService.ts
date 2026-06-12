@@ -5,6 +5,7 @@ import { isAiAssessmentEnabled } from './aiAssessment';
 import { env } from './env';
 import { asyncRoute, errorHandler, routeParam } from './httpUtils';
 import { logServer, readLogTail } from './logger';
+import { isProxyEnabled } from './proxy';
 import { scrapeJobManager } from './scrapeJobManager';
 
 const app = express();
@@ -27,6 +28,7 @@ app.get('/api/health', (_req, res) => {
     scraper_collect_carousels: env.scraperCollectCarousels,
     ai_assessment_enabled: isAiAssessmentEnabled(),
     ai_assessment_force: env.aiAssessmentForce,
+    proxy_enabled: isProxyEnabled(),
     active_jobs: scrapeJobManager.list().filter((job) => job.status === 'running').length
   });
 });
@@ -88,5 +90,9 @@ app.use(errorHandler);
 
 app.listen(env.scraperPort, () => {
   console.log(`Scraper API listening on http://localhost:${env.scraperPort}`);
-  logServer('info', 'Scraper API started', { port: env.scraperPort, headless: env.scraperHeadless });
+  logServer('info', 'Scraper API started', {
+    port: env.scraperPort,
+    headless: env.scraperHeadless,
+    proxy_enabled: isProxyEnabled()
+  });
 });

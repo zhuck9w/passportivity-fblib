@@ -460,6 +460,53 @@ select,
   font-size: 13px;
 }
 
+.days-active-filter {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  border: 1px solid #d7dee2;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.days-active-filter:focus-within {
+  border-color: #1769e0;
+}
+
+.days-active-filter .days-active-op {
+  height: 36px;
+  min-width: 128px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 8px 0 10px;
+}
+
+.days-active-filter .days-active-op:focus {
+  outline: 0;
+}
+
+.days-active-filter .days-active-value {
+  height: 36px;
+  width: 88px;
+  min-width: 0;
+  border: 0;
+  border-left: 1px solid #d7dee2;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 10px;
+}
+
+.days-active-filter .days-active-value:focus {
+  outline: 0;
+}
+
+.days-active-filter .days-active-value:disabled {
+  color: #aab4bc;
+  cursor: not-allowed;
+}
+
 .sort-toggle {
   display: inline-flex;
   height: 38px;

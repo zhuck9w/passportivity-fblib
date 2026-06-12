@@ -4,6 +4,7 @@ import { buildAdLibraryUrl } from '../../shared/adLibraryUrl';
 import type { Competitor, ScrapedAdInput } from '../../shared/types';
 import { env } from '../env';
 import { logScraper } from '../logger';
+import { playwrightProxy } from '../proxy';
 import {
   extractCardFallbackAd,
   extractCardMediaSnapshot,
@@ -49,7 +50,9 @@ export class FacebookAdLibraryScraper {
     const launchOptions = {
       headless: env.scraperHeadless,
       slowMo: env.scraperSlowMoMs,
-      channel: env.scraperBrowserChannel
+      channel: env.scraperBrowserChannel,
+      // Routes all browser traffic (FB pages + fbcdn media) through the proxy when set.
+      proxy: playwrightProxy()
     };
 
     if (env.scraperUserDataDir) {
@@ -90,6 +93,7 @@ export class FacebookAdLibraryScraper {
         collect_carousels: collectCarousels
       });
       await this.openResults(page, sourceUrl, config);
+      await this.logLoginState(context, page, competitor.name);
       await this.scrollResults(page, config, limit);
 
       const totalCards = await this.resultActionButtons(page, config).count();
@@ -160,6 +164,33 @@ export class FacebookAdLibraryScraper {
       logScraper('warn', 'Meta returned an error state, reloading once');
       await page.reload({ waitUntil: 'domcontentloaded', timeout: env.scraperNavigationTimeoutMs });
       await this.waitForResultsOrError(page, config, true);
+    }
+  }
+
+  // Logs whether the persistent profile is still authenticated with Facebook. FB sets the
+  // `c_user` cookie (= the account id) only while logged in, so its presence is a reliable,
+  // locale-independent signal — far more robust than scraping the DOM for a "Log in" button.
+  // A `warn` here on the VPS means the copied profile's session expired and needs a re-login.
+  private async logLoginState(context: BrowserContext, page: Page, competitorName: string) {
+    try {
+      const cookies = await context.cookies('https://www.facebook.com');
+      const accountId = cookies.find((cookie) => cookie.name === 'c_user')?.value ?? null;
+      const loggedIn = Boolean(accountId);
+      logScraper(
+        loggedIn ? 'info' : 'warn',
+        loggedIn ? 'Facebook login active' : 'Facebook login MISSING — session expired or profile not logged in',
+        {
+          competitor: competitorName,
+          logged_in: loggedIn,
+          fb_account_id: accountId,
+          url: page.url()
+        }
+      );
+    } catch (error) {
+      logScraper('warn', 'Facebook login check failed', {
+        competitor: competitorName,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 

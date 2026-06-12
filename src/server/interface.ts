@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from './env';
 import { asyncRoute, errorHandler, routeParam } from './httpUtils';
 import { logServer } from './logger';
+import { isProxyEnabled, proxiedFetch } from './proxy';
 import {
   bulkCreateCompetitors,
   bulkSetAdHidden,
@@ -156,7 +157,7 @@ app.get(
       return;
     }
 
-    const upstream = await fetch(target.toString(), {
+    const upstream = await proxiedFetch(target.toString(), {
       headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'image/*' }
     });
     const contentType = upstream.headers.get('content-type') ?? '';
@@ -205,6 +206,7 @@ app.listen(env.port, () => {
   console.log(`Interface API listening on http://localhost:${env.port}`);
   logServer('info', 'Interface API started', {
     port: env.port,
-    using_publishable_key_for_server: env.usingPublishableKeyForServer
+    using_publishable_key_for_server: env.usingPublishableKeyForServer,
+    proxy_enabled: isProxyEnabled()
   });
 });

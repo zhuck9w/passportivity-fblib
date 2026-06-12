@@ -49,6 +49,8 @@ export const env = {
   supabaseServerKey: serverKey,
   usingPublishableKeyForServer: serverKey === process.env.SUPABASE_PUBLISHABLE_KEY?.trim(),
   scraperHeadless: (process.env.SCRAPER_HEADLESS ?? 'false').toLowerCase() === 'true',
+  // Outbound proxy for FB + OpenAI traffic (see src/server/proxy.ts). Unset = no proxy.
+  proxyUrl: readOptional('PROXY_URL'),
   scraperBrowserChannel: readOptional('SCRAPER_BROWSER_CHANNEL'),
   scraperUserDataDir: readOptional('SCRAPER_USER_DATA_DIR'),
   scraperSlowMoMs: readNumber('SCRAPER_SLOW_MO_MS', 0),

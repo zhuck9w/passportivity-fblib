@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import readline from 'node:readline/promises';
 import dotenv from 'dotenv';
 import { chromium } from 'playwright';
+import { playwrightProxy } from '../proxy';
 
 dotenv.config();
 
@@ -28,7 +29,10 @@ const context = await chromium.launchPersistentContext(userDataDir, {
   headless: false,
   channel,
   locale: 'ru-RU',
-  viewport: null
+  viewport: null,
+  // Log in through the same proxy the scraper uses, so the saved session matches the
+  // egress IP/country FB will later see during scraping.
+  proxy: playwrightProxy()
 });
 
 const page = context.pages()[0] ?? (await context.newPage());
