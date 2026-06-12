@@ -8,6 +8,7 @@ import {
   Eye,
   EyeOff,
   Filter,
+  Info,
   ListChecks,
   Loader2,
   MapPinned,
@@ -36,7 +37,7 @@ import {
   useState
 } from 'react';
 import { adAiAssessmentKeys } from '../shared/types';
-import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
+import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
 import {
   bulkCreateCompetitors,
   bulkSetAdHidden,
@@ -47,6 +48,7 @@ import {
   fetchAds,
   fetchCompetitors,
   fetchJob,
+  fetchScrapeRuns,
   imageProxyUrl,
   setAdHidden,
   startScrape,
@@ -733,6 +735,22 @@ function formatDateTime(value: string | null | undefined) {
   });
 }
 
+// Wall-clock duration of a scrape run (start → finish, AI analysis included), as 1h30m / 30m / 45s.
+function formatScrapeDuration(run: Pick<ScrapeRun, 'started_at' | 'finished_at'>) {
+  if (!run.started_at || !run.finished_at) return null;
+  const ms = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
 // Raw geo rows are a cross product of country × age bucket × gender. Country-level rows
 // (location_type «Страна»/«Регион») carry visibility «Включено»/«Исключено»; demographic
 // rows carry gender there. For display we keep unique countries split by include/exclude.
@@ -982,6 +1000,7 @@ export function App() {
   const hIndicatorRef = useRef<HTMLDivElement | null>(null);
   const indicatorFadeTimer = useRef<number | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
+  const [lastRun, setLastRun] = useState<ScrapeRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -1000,10 +1019,21 @@ export function App() {
       const [nextCompetitors, nextAds] = await Promise.all([fetchCompetitors(), fetchAds(filters)]);
       setCompetitors(nextCompetitors);
       setAds(nextAds);
+      void loadLastRun();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Latest finished scrape — drives the "Собрано: …" badge. Non-critical: failures are ignored.
+  async function loadLastRun() {
+    try {
+      const { persisted } = await fetchScrapeRuns();
+      setLastRun(persisted.find((run) => run.finished_at) ?? persisted[0] ?? null);
+    } catch {
+      // ignore — the badge just stays as-is
     }
   }
 
@@ -1473,6 +1503,8 @@ export function App() {
     [tableLayout.columnWidths]
   );
   const tableWidth = baseTableWidth + controlColumnWidth;
+  const lastScrapeAt = lastRun?.finished_at ? formatDateTime(lastRun.finished_at) : null;
+  const lastScrapeDuration = lastRun ? formatScrapeDuration(lastRun) : null;
   const activeResizeColumnKey = activeColumnKey ?? hoveredColumnKey;
   const activeResizeColumnEdge = activeColumnKey ? activeColumnEdge : hoveredColumnEdge;
   const activeResizeRowId = activeRowId ?? hoveredRowId;
@@ -1691,6 +1723,23 @@ export function App() {
           <h1>Таблица объявлений конкурентов</h1>
         </div>
         <div className="topbar-actions">
+          {lastScrapeAt && (
+            <div className="last-scrape desktop-only">
+              <span>
+                Собрано: <strong>{lastScrapeAt}</strong>
+              </span>
+              {lastScrapeDuration && (
+                <span
+                  className="last-scrape-info"
+                  tabIndex={0}
+                  title={`Собрано за: ${lastScrapeDuration}`}
+                  aria-label={`Собрано за: ${lastScrapeDuration}`}
+                >
+                  <Info size={15} />
+                </span>
+              )}
+            </div>
+          )}
           <button className="icon-button desktop-only" onClick={() => void refresh()} title="Обновить">
             <RefreshCw size={18} className={loading ? 'spin' : ''} />
           </button>

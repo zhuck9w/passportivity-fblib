@@ -1,4 +1,4 @@
-import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot } from '../shared/types';
+import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
 
 // Interface backend (competitors, ads, geo). Same-origin by default — proxied to the
 // interface server in dev (see vite.config.ts), same domain when deployed to Vercel.
@@ -121,6 +121,10 @@ export function fetchAdLocations(ids: string[]) {
     method: 'POST',
     body: JSON.stringify({ ids })
   });
+}
+
+export function fetchScrapeRuns() {
+  return api<{ persisted: ScrapeRun[] }>('/api/runs');
 }
 
 // --- Scraper service (separate origin) ---

@@ -90,6 +90,34 @@ h2 {
   justify-content: flex-end;
 }
 
+.last-scrape {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #586670;
+  white-space: nowrap;
+}
+
+.last-scrape strong {
+  color: #172026;
+  font-weight: 600;
+}
+
+.last-scrape-info {
+  display: inline-flex;
+  align-items: center;
+  color: #93a1ab;
+  cursor: help;
+  border-radius: 50%;
+}
+
+.last-scrape-info:hover,
+.last-scrape-info:focus-visible {
+  color: #1769e0;
+  outline: none;
+}
+
 .primary-button,
 .secondary-button,
 .icon-button {
