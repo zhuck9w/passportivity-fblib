@@ -102,7 +102,6 @@ app.get(
       await listAds({
         competitorIds: competitorIds.length ? competitorIds : undefined,
         status: String(req.query.status ?? '') || undefined,
-        platform: String(req.query.platform ?? '') || undefined,
         q: String(req.query.q ?? '') || undefined
       })
     );

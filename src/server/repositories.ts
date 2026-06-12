@@ -292,7 +292,6 @@ export async function finishCompetitorScan(input: {
 export async function listAds(filters: {
   competitorIds?: string[];
   status?: string;
-  platform?: string;
   q?: string;
 }) {
   let query = supabase
@@ -304,7 +303,6 @@ export async function listAds(filters: {
   if (filters.competitorIds?.length) query = query.in('competitor_id', filters.competitorIds);
   if (filters.status === 'active') query = query.in('status', ['active', 'new']);
   else if (filters.status) query = query.eq('status', filters.status);
-  if (filters.platform) query = query.contains('platforms', [filters.platform]);
   if (filters.q) {
     query = query.or(`title.ilike.%${filters.q}%,body_text.ilike.%${filters.q}%,preview_text.ilike.%${filters.q}%`);
   }

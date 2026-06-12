@@ -31,6 +31,9 @@ button {
 main {
   width: 100%;
   height: 100vh;
+  /* Dynamic viewport height: on phones 100vh ignores the browser toolbar, pushing the
+     bottom of the table (and its horizontal scrollbar) off-screen. */
+  height: 100dvh;
   margin: 0;
   padding: 16px;
   display: flex;
@@ -156,6 +159,16 @@ h2 {
 
 .danger-button {
   color: #b42318;
+}
+
+/* Desktop: the wrapper is layout-transparent, mobile-only controls are hidden. */
+.collapsible-controls {
+  display: contents;
+}
+
+.burger-button,
+.mobile-extra {
+  display: none;
 }
 
 .notice {
@@ -454,11 +467,37 @@ select,
 }
 
 .table-section {
+  position: relative;
   min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* Own scroll indicators for touch devices: drawn above sticky cells (native overlay
+   scrollbars get covered by them). Updated imperatively on scroll, no re-renders. */
+.scroll-indicator {
+  display: none;
+  position: absolute;
+  z-index: 10;
+  background: rgba(44, 58, 68, 0.55);
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+
+.scroll-indicator.vertical {
+  top: 2px;
+  right: 2px;
+  width: 5px;
+}
+
+.scroll-indicator.horizontal {
+  left: 2px;
+  bottom: 2px;
+  height: 5px;
 }
 
 .table-shell {
@@ -469,6 +508,44 @@ select,
   border: 1px solid #d7dee2;
   border-radius: 8px;
   background: #fff;
+}
+
+/* Touch devices: resize/pin affordances are mouse-only UX, and their touch-action: none
+   zones at every cell edge swallow swipes. Inner cell scroll also traps the pan gesture. */
+@media (pointer: coarse) {
+  .column-resize-handle,
+  .row-resize-handle,
+  .pin-button {
+    display: none;
+  }
+
+  .body-cell {
+    overflow: hidden;
+  }
+
+  /* Hover backgrounds are meaningless on touch and only cause extra invalidations on tap. */
+  .ad-table tbody tr:hover,
+  .ad-table tbody tr:hover td.col-pinned,
+  .ad-table tbody tr.row-hidden:hover {
+    background: inherit;
+  }
+
+  /* Native overlay scrollbars get painted UNDER sticky cells (header, pinned columns)
+     on touch devices, so we hide them and draw our own indicators above everything
+     (see .scroll-indicator). */
+  .table-shell {
+    scrollbar-width: none;
+  }
+
+  .table-shell::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .scroll-indicator {
+    display: block;
+  }
 }
 
 .ad-table {
@@ -511,7 +588,6 @@ select,
   width: 10px;
   height: 100%;
   cursor: col-resize;
-  touch-action: none;
 }
 
 .column-resize-handle.right-edge {
@@ -705,6 +781,14 @@ select,
   height: var(--row-height, 138px);
 }
 
+/* Spacer rows that stand in for virtualized (unmounted) rows. */
+.ad-table tbody tr.virtual-spacer,
+.ad-table tbody tr.virtual-spacer td {
+  height: auto;
+  padding: 0;
+  border: 0;
+}
+
 .ad-table tbody td {
   position: relative;
   height: var(--row-height, 138px);
@@ -727,7 +811,6 @@ select,
   height: 8px;
   display: block;
   cursor: row-resize;
-  touch-action: none;
 }
 
 .row-resize-handle::after {
@@ -1309,7 +1392,7 @@ select,
 
 .locations-table div {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   padding: 10px 12px;
   border-top: 1px solid #edf1f3;
@@ -1323,6 +1406,11 @@ select,
   background: #edf2f5;
   color: #44525c;
   font-weight: 700;
+}
+
+.locations-head.excluded-head {
+  background: #fdf0ee;
+  color: #9a3412;
 }
 
 .locations-table p {
@@ -1358,6 +1446,16 @@ select,
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .eyebrow {
+    display: none;
+  }
+
+  h1 {
+    font-size: 20px;
   }
 
   .topbar-actions,
@@ -1372,7 +1470,51 @@ select,
     flex: 1;
   }
 
-  .metrics,
+  /* Only the primary actions stay in the topbar; the rest lives in the burger menu. */
+  .desktop-only {
+    display: none !important;
+  }
+
+  .burger-button {
+    display: inline-flex;
+    flex: 0 0 38px;
+  }
+
+  .collapsible-controls {
+    display: none;
+  }
+
+  .collapsible-controls.open {
+    display: block;
+  }
+
+  .mobile-extra {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .mobile-extra > * {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbar .sort-toggle {
+    flex: 1 1 100%;
+  }
+
+  .sort-toggle button {
+    flex: 1;
+  }
+
+  .multi-select-panel {
+    width: min(280px, calc(100vw - 48px));
+  }
+
   .competitor-form,
   .geo-summary {
     grid-template-columns: 1fr;

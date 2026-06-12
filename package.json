@@ -10,6 +10,7 @@
     "dev:scraper": "tsx watch src/server/scraperService.ts",
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "login:facebook": "tsx src/server/scripts/loginFacebookProfile.ts",
     "restore:split-ads": "tsx src/server/scripts/restoreSplitAds.ts",

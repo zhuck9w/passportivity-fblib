@@ -9,6 +9,7 @@ import {
   Filter,
   Loader2,
   MapPinned,
+  Menu,
   Pin,
   PinOff,
   Play,
@@ -25,6 +26,7 @@ import {
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -51,14 +53,13 @@ import {
 type Filters = {
   competitorIds: string[];
   status: string;
-  platform: string;
   q: string;
 };
 
 const filtersStorageKey = 'ad-library-filters-v1';
 
 function loadFilters(): Filters {
-  const fallback: Filters = { competitorIds: [], status: '', platform: '', q: '' };
+  const fallback: Filters = { competitorIds: [], status: '', q: '' };
   if (typeof window === 'undefined') return fallback;
 
   try {
@@ -72,7 +73,6 @@ function loadFilters(): Filters {
           ? [parsed.competitorId]
           : [],
       status: typeof parsed.status === 'string' ? parsed.status : '',
-      platform: typeof parsed.platform === 'string' ? parsed.platform : '',
       q: typeof parsed.q === 'string' ? parsed.q : ''
     };
   } catch {
@@ -91,6 +91,21 @@ type TableColumn = {
 type ColumnResizeEdge = 'left' | 'right';
 
 type SortMode = 'company' | 'new-first';
+
+// Row callbacks passed to memoized AdRow through a stable wrapper (latest-ref pattern),
+// so scrolling re-renders only mount/unmount edge rows instead of every visible row.
+type RowHandlers = {
+  onColumnHandleEnter: (columnKey: string, edge: ColumnResizeEdge) => void;
+  onColumnHandleLeave: (columnKey: string, edge: ColumnResizeEdge) => void;
+  onColumnResizeStart: (event: ReactMouseEvent, column: TableColumn, edge: ColumnResizeEdge) => void;
+  onRowHandleEnter: (adId: string) => void;
+  onRowHandleLeave: (adId: string) => void;
+  onRowResizeStart: (event: ReactMouseEvent, ad: Ad) => void;
+  onToggleHidden: (ad: Ad, hidden: boolean) => void;
+  onOpenPreview: (ad: Ad) => void;
+  onOpenGeo: (ad: Ad) => void;
+  onAspectRatio: (adId: string, aspectRatio: number | null) => void;
+};
 
 const sortModeStorageKey = 'ad-library-sort-mode';
 
@@ -503,9 +518,12 @@ function useBestPreviewImage(html: string | null) {
 
 function usePreviewMediaItems(ad: Ad): PreviewMediaItem[] {
   const storedItems = useMemo(() => normalizeStoredMediaItems(ad.media_items), [ad.media_items]);
-  const carouselItems = useMemo(() => extractCarouselMediaItems(ad.preview_html), [ad.preview_html]);
-  const video = useMemo(() => extractPreviewVideo(ad.preview_html), [ad.preview_html]);
-  const imageUrl = useBestPreviewImage(ad.preview_html);
+  // When stored media items exist they win anyway — skip the expensive preview_html
+  // fallbacks entirely (DOM parsing + preloading up to 8 candidate images per row).
+  const fallbackHtml = storedItems.length ? null : ad.preview_html;
+  const carouselItems = useMemo(() => extractCarouselMediaItems(fallbackHtml), [fallbackHtml]);
+  const video = useMemo(() => extractPreviewVideo(fallbackHtml), [fallbackHtml]);
+  const imageUrl = useBestPreviewImage(fallbackHtml);
 
   return useMemo(() => {
     if (storedItems.length) return storedItems;
@@ -709,18 +727,25 @@ function formatDateTime(value: string | null | undefined) {
   });
 }
 
-function extractAgeGroups(locations: AdLocation[] = []) {
-  const ageGroups = new Set<string>();
-  const agePattern = /\b(?:1[3-9]|[2-6]\d)-(?:1[3-9]|[2-6]\d)\b|\b65\+/g;
+// Raw geo rows are a cross product of country × age bucket × gender. Country-level rows
+// (location_type «Страна»/«Регион») carry visibility «Включено»/«Исключено»; demographic
+// rows carry gender there. For display we keep unique countries split by include/exclude.
+function groupGeoCountries(locations: AdLocation[] = []) {
+  const all = new Set<string>();
+  const excluded = new Set<string>();
 
   for (const location of locations) {
-    const text = [location.location, location.location_type, location.visibility].filter(Boolean).join(' ');
-    for (const match of text.matchAll(agePattern)) {
-      ageGroups.add(match[0]);
-    }
+    const name = location.location.trim();
+    if (!name) continue;
+    all.add(name);
+    if (location.visibility?.trim().toLowerCase() === 'исключено') excluded.add(name);
   }
 
-  return Array.from(ageGroups).sort((left, right) => left.localeCompare(right, 'ru'));
+  const sortRu = (values: string[]) => values.sort((left, right) => left.localeCompare(right, 'ru'));
+  return {
+    included: sortRu(Array.from(all).filter((name) => !excluded.has(name))),
+    excluded: sortRu(Array.from(excluded))
+  };
 }
 
 function extractFormattedTextFromPreviewHtml(html: string | null) {
@@ -760,12 +785,21 @@ function extractFormattedTextFromPreviewHtml(html: string | null) {
   return candidates[0] ?? '';
 }
 
+// Parsing 10–15KB of preview_html with DOMParser per row per render is what makes phones
+// crawl (dozens of re-renders during initial load × dozens of rows). Ad objects are stable
+// across renders, so a WeakMap cache turns repeat calls into lookups.
+const adBodyTextCache = new WeakMap<Ad, string>();
+
 function getAdBodyText(ad: Ad) {
-  return (
+  const cached = adBodyTextCache.get(ad);
+  if (cached !== undefined) return cached;
+
+  const value =
     cleanBodyTextForDisplay(extractFormattedTextFromPreviewHtml(ad.preview_html)) ||
     cleanBodyTextForDisplay(ad.body_text) ||
-    cleanBodyTextForDisplay(ad.preview_text)
-  );
+    cleanBodyTextForDisplay(ad.preview_text);
+  adBodyTextCache.set(ad, value);
+  return value;
 }
 
 function cleanBodyTextForDisplay(value: string | null) {
@@ -870,6 +904,7 @@ export function App() {
   const [filters, setFilters] = useState<Filters>(() => loadFilters());
   const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [collectCarousels, setCollectCarousels] = useState(true);
   const [tableLayout, setTableLayout] = useState<TableLayout>(() => loadTableLayout());
   const [hoveredColumnKey, setHoveredColumnKey] = useState<string | null>(null);
@@ -880,9 +915,17 @@ export function App() {
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [previewAspectRatios, setPreviewAspectRatios] = useState<Record<string, number>>({});
   const [tableShellWidth, setTableShellWidth] = useState(0);
+  const [viewportTop, setViewportTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const tableShellRef = useRef<HTMLDivElement | null>(null);
   const columnHoverTimer = useRef<number | null>(null);
   const rowHoverTimer = useRef<number | null>(null);
+  const pendingAspectRatios = useRef<Record<string, number>>({});
+  const aspectRatioFlushTimer = useRef<number | null>(null);
+  const scrollRafPending = useRef(false);
+  const vIndicatorRef = useRef<HTMLDivElement | null>(null);
+  const hIndicatorRef = useRef<HTMLDivElement | null>(null);
+  const indicatorFadeTimer = useRef<number | null>(null);
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -905,7 +948,7 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-  }, [competitorIdsKey, filters.status, filters.platform]);
+  }, [competitorIdsKey, filters.status]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), 350);
@@ -969,6 +1012,7 @@ export function App() {
 
     const measureTableShell = () => {
       setTableShellWidth(Math.ceil(tableShell.clientWidth));
+      setViewportHeight(Math.ceil(tableShell.clientHeight));
     };
 
     measureTableShell();
@@ -1002,6 +1046,8 @@ export function App() {
     () => () => {
       clearColumnHoverTimer();
       clearRowHoverTimer();
+      if (aspectRatioFlushTimer.current !== null) window.clearTimeout(aspectRatioFlushTimer.current);
+      if (indicatorFadeTimer.current !== null) window.clearTimeout(indicatorFadeTimer.current);
     },
     []
   );
@@ -1091,12 +1137,28 @@ export function App() {
     }, resizeHoverDelayMs);
   }
 
+  // Each loaded thumb reports its aspect ratio; flushing them one by one would re-render
+  // the whole table per image (dozens of times during initial load). Buffer and flush once.
   function rememberPreviewAspectRatio(adId: string, aspectRatio: number | null) {
     if (!aspectRatio || !Number.isFinite(aspectRatio)) return;
-    setPreviewAspectRatios((current) => {
-      if (Math.abs((current[adId] ?? 0) - aspectRatio) < 0.001) return current;
-      return { ...current, [adId]: aspectRatio };
-    });
+    pendingAspectRatios.current[adId] = aspectRatio;
+    if (aspectRatioFlushTimer.current !== null) return;
+
+    aspectRatioFlushTimer.current = window.setTimeout(() => {
+      aspectRatioFlushTimer.current = null;
+      const pending = pendingAspectRatios.current;
+      pendingAspectRatios.current = {};
+      setPreviewAspectRatios((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const [id, ratio] of Object.entries(pending)) {
+          if (Math.abs((next[id] ?? 0) - ratio) < 0.001) continue;
+          next[id] = ratio;
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+    }, 200);
   }
 
   function handleColumnResizeStart(event: ReactMouseEvent, column: TableColumn, edge: ColumnResizeEdge) {
@@ -1226,6 +1288,94 @@ export function App() {
     if (!fresh.length) return renderedAds;
     return [...fresh, ...renderedAds.filter((ad) => ad.status !== 'new')];
   }, [renderedAds, sortMode]);
+
+  // Row virtualization: only rows near the viewport are mounted; the rest is replaced by
+  // two spacer rows so scroll geometry stays intact. Row heights are known up front.
+  const virtualRowHeights = useMemo(
+    () => sortedAds.map((ad) => tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id])),
+    [sortedAds, tableLayout.rowHeights, previewAspectRatios]
+  );
+  const virtualRowOffsets = useMemo(() => {
+    const offsets = new Array<number>(virtualRowHeights.length + 1);
+    offsets[0] = 0;
+    for (let index = 0; index < virtualRowHeights.length; index += 1) {
+      offsets[index + 1] = offsets[index] + virtualRowHeights[index];
+    }
+    return offsets;
+  }, [virtualRowHeights]);
+  const virtualRange = useMemo(() => {
+    const count = virtualRowHeights.length;
+    if (!count) return { start: 0, end: 0, topPad: 0, bottomPad: 0 };
+
+    const overscan = 1000;
+    const viewStart = Math.max(0, viewportTop - overscan);
+    const viewEnd = viewportTop + (viewportHeight || 900) + overscan;
+    let start = 0;
+    while (start < count - 1 && virtualRowOffsets[start + 1] <= viewStart) start += 1;
+    let end = start;
+    while (end < count && virtualRowOffsets[end] < viewEnd) end += 1;
+
+    return {
+      start,
+      end,
+      topPad: virtualRowOffsets[start],
+      bottomPad: Math.max(0, virtualRowOffsets[count] - virtualRowOffsets[end])
+    };
+  }, [virtualRowHeights, virtualRowOffsets, viewportTop, viewportHeight]);
+
+  // Custom scroll indicators for touch devices (native overlay scrollbars are painted
+  // under sticky cells). Updated directly through the DOM — no React re-renders.
+  function updateScrollIndicators() {
+    const shell = tableShellRef.current;
+    const vertical = vIndicatorRef.current;
+    const horizontal = hIndicatorRef.current;
+    if (!shell || !vertical || !horizontal) return;
+
+    const { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth } = shell;
+
+    if (scrollHeight > clientHeight + 1) {
+      const track = clientHeight - 4;
+      const size = Math.max(32, (clientHeight / scrollHeight) * track);
+      const position = (scrollTop / (scrollHeight - clientHeight)) * (track - size);
+      vertical.style.height = `${Math.round(size)}px`;
+      vertical.style.transform = `translateY(${Math.round(position)}px)`;
+      vertical.style.opacity = '1';
+    } else {
+      vertical.style.opacity = '0';
+    }
+
+    if (scrollWidth > clientWidth + 1) {
+      const track = clientWidth - 4;
+      const size = Math.max(32, (clientWidth / scrollWidth) * track);
+      const position = (scrollLeft / (scrollWidth - clientWidth)) * (track - size);
+      horizontal.style.width = `${Math.round(size)}px`;
+      horizontal.style.transform = `translateX(${Math.round(position)}px)`;
+      horizontal.style.opacity = '1';
+    } else {
+      horizontal.style.opacity = '0';
+    }
+
+    if (indicatorFadeTimer.current !== null) window.clearTimeout(indicatorFadeTimer.current);
+    indicatorFadeTimer.current = window.setTimeout(() => {
+      indicatorFadeTimer.current = null;
+      if (vIndicatorRef.current) vIndicatorRef.current.style.opacity = '0';
+      if (hIndicatorRef.current) hIndicatorRef.current.style.opacity = '0';
+    }, 800);
+  }
+
+  function handleTableScroll() {
+    if (scrollRafPending.current) return;
+    scrollRafPending.current = true;
+    requestAnimationFrame(() => {
+      scrollRafPending.current = false;
+      const shell = tableShellRef.current;
+      if (!shell) return;
+      updateScrollIndicators();
+      // Quantize so horizontal scrolling and tiny moves don't trigger re-renders.
+      const quantized = Math.floor(shell.scrollTop / 160) * 160;
+      setViewportTop((current) => (current === quantized ? current : quantized));
+    });
+  }
   const counters = useMemo(
     () => ({
       competitors: competitors.length,
@@ -1269,11 +1419,6 @@ export function App() {
     return left === undefined ? undefined : { left };
   }
 
-  function pinnableCellProps(columnKey: string) {
-    const className = [columnBoundaryClass(columnKey), pinnedColumnClass(columnKey)].filter(Boolean).join(' ');
-    return { className: className || undefined, style: pinnedColumnStyle(columnKey) };
-  }
-
   function togglePinnedColumn(columnKey: string) {
     setTableLayout((current) => ({
       ...current,
@@ -1284,10 +1429,6 @@ export function App() {
   function columnBoundaryClass(columnKey: string) {
     if (activeResizeColumnKey !== columnKey) return '';
     return activeResizeColumnEdge === 'left' ? 'column-boundary-left-active' : 'column-boundary-right-active';
-  }
-
-  function rowBoundaryClass(rowId: string) {
-    return activeResizeRowId === rowId ? 'row-boundary-active' : '';
   }
 
   function renderColumnResizeHandle(
@@ -1321,23 +1462,6 @@ export function App() {
     return renderColumnResizeHandle(column, 'left', 'left');
   }
 
-  function renderRowResizeHandle(ad: Ad) {
-    return (
-      <span
-        className="row-resize-handle"
-        role="separator"
-        aria-orientation="horizontal"
-        tabIndex={0}
-        onMouseEnter={() => scheduleRowHover(ad.id)}
-        onMouseLeave={() => {
-          clearRowHoverTimer();
-          setHoveredRowId((current) => (current === ad.id && activeRowId !== ad.id ? null : current));
-        }}
-        onMouseDown={(event) => handleRowResizeStart(event, ad)}
-      />
-    );
-  }
-
   function handleToggleAdHidden(ad: Ad, hidden: boolean) {
     setAds((current) => current.map((item) => (item.id === ad.id ? { ...item, hidden } : item)));
     setAdHidden(ad.id, hidden).catch((requestError) => {
@@ -1346,40 +1470,42 @@ export function App() {
     });
   }
 
-  function renderAdHideButton(ad: Ad) {
-    const hidden = Boolean(ad.hidden);
-    return (
-      <button
-        type="button"
-        className={`row-hide-button ${hidden ? 'is-hidden' : ''}`.trim()}
-        onClick={() => handleToggleAdHidden(ad, !hidden)}
-        title={hidden ? 'Вернуть объявление в таблицу' : 'Скрыть объявление из таблицы'}
-      >
-        {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
-      </button>
-    );
-  }
-
-  function renderGeoCell(ad: Ad) {
-    const locations = geoByAd[ad.id];
-
-    if (locations === undefined) {
-      return geoLoading ? (
-        <span className="geo-loading">
-          <Loader2 size={14} className="spin" />
-        </span>
-      ) : null;
-    }
-
-    if (!locations.length) return null;
-
-    return (
-      <button type="button" className="geo-button" onClick={() => void openGeo(ad)}>
-        <MapPinned size={15} />
-        geo
-      </button>
-    );
-  }
+  const rowHandlersRef = useRef<RowHandlers>(null!);
+  rowHandlersRef.current = {
+    onColumnHandleEnter: scheduleColumnHover,
+    onColumnHandleLeave: (columnKey, edge) => {
+      clearColumnHoverTimer();
+      setHoveredColumnKey((current) =>
+        current === columnKey && (activeColumnKey !== columnKey || activeColumnEdge !== edge) ? null : current
+      );
+    },
+    onColumnResizeStart: handleColumnResizeStart,
+    onRowHandleEnter: scheduleRowHover,
+    onRowHandleLeave: (adId) => {
+      clearRowHoverTimer();
+      setHoveredRowId((current) => (current === adId && activeRowId !== adId ? null : current));
+    },
+    onRowResizeStart: handleRowResizeStart,
+    onToggleHidden: handleToggleAdHidden,
+    onOpenPreview: (ad) => void openPreview(ad),
+    onOpenGeo: (ad) => void openGeo(ad),
+    onAspectRatio: rememberPreviewAspectRatio
+  };
+  const stableRowHandlers = useMemo<RowHandlers>(
+    () => ({
+      onColumnHandleEnter: (key, edge) => rowHandlersRef.current.onColumnHandleEnter(key, edge),
+      onColumnHandleLeave: (key, edge) => rowHandlersRef.current.onColumnHandleLeave(key, edge),
+      onColumnResizeStart: (event, column, edge) => rowHandlersRef.current.onColumnResizeStart(event, column, edge),
+      onRowHandleEnter: (adId) => rowHandlersRef.current.onRowHandleEnter(adId),
+      onRowHandleLeave: (adId) => rowHandlersRef.current.onRowHandleLeave(adId),
+      onRowResizeStart: (event, ad) => rowHandlersRef.current.onRowResizeStart(event, ad),
+      onToggleHidden: (ad, hidden) => rowHandlersRef.current.onToggleHidden(ad, hidden),
+      onOpenPreview: (ad) => rowHandlersRef.current.onOpenPreview(ad),
+      onOpenGeo: (ad) => rowHandlersRef.current.onOpenGeo(ad),
+      onAspectRatio: (adId, ratio) => rowHandlersRef.current.onAspectRatio(adId, ratio)
+    }),
+    []
+  );
 
   return (
     <main>
@@ -1389,14 +1515,14 @@ export function App() {
           <h1>Таблица объявлений конкурентов</h1>
         </div>
         <div className="topbar-actions">
-          <button className="icon-button" onClick={() => void refresh()} title="Обновить">
+          <button className="icon-button desktop-only" onClick={() => void refresh()} title="Обновить">
             <RefreshCw size={18} className={loading ? 'spin' : ''} />
           </button>
           <button className="secondary-button" onClick={() => setCompetitorsOpen(true)}>
             <Settings size={18} />
             Конкуренты
           </button>
-          <label className="topbar-toggle">
+          <label className="topbar-toggle desktop-only">
             <input
               type="checkbox"
               checked={collectCarousels}
@@ -1407,6 +1533,15 @@ export function App() {
           <button className="primary-button" onClick={() => void handleStartScrape()}>
             <Play size={18} />
             Собрать включенных
+          </button>
+          <button
+            type="button"
+            className="icon-button burger-button"
+            onClick={() => setMobileMenuOpen((value) => !value)}
+            aria-expanded={mobileMenuOpen ? 'true' : 'false'}
+            title={mobileMenuOpen ? 'Скрыть фильтры и статистику' : 'Фильтры и статистика'}
+          >
+            {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         </div>
       </header>
@@ -1420,14 +1555,30 @@ export function App() {
         </div>
       )}
 
-      <section className="metrics">
-        <Metric icon={<Database size={18} />} label="Объявлений" value={counters.ads} />
-        <Metric icon={<CheckCircle2 size={18} />} label="Включено конкурентов" value={counters.enabled} />
-        <Metric icon={<CirclePause size={18} />} label="Всего конкурентов" value={counters.competitors} />
-        <Metric icon={<Filter size={18} />} label="Активных в таблице" value={counters.active} />
-      </section>
-
       {job && <JobPanel job={job} onStop={() => void handleStopScrape()} />}
+
+      <div className={`collapsible-controls ${mobileMenuOpen ? 'open' : ''}`.trim()}>
+        <div className="mobile-extra">
+          <button type="button" className="secondary-button" onClick={() => void refresh()}>
+            <RefreshCw size={17} className={loading ? 'spin' : ''} />
+            Обновить
+          </button>
+          <label className="topbar-toggle">
+            <input
+              type="checkbox"
+              checked={collectCarousels}
+              onChange={(event) => setCollectCarousels(event.target.checked)}
+            />
+            <span>Карусели</span>
+          </label>
+        </div>
+
+        <section className="metrics">
+          <Metric icon={<Database size={18} />} label="Объявлений" value={counters.ads} />
+          <Metric icon={<CheckCircle2 size={18} />} label="Включено конкурентов" value={counters.enabled} />
+          <Metric icon={<CirclePause size={18} />} label="Всего конкурентов" value={counters.competitors} />
+          <Metric icon={<Filter size={18} />} label="Активных в таблице" value={counters.active} />
+        </section>
 
       <section className="toolbar">
         <label className="search-box">
@@ -1456,18 +1607,6 @@ export function App() {
           <option value="inactive">Inactive</option>
           <option value="unknown">Неизвестно</option>
         </select>
-        <select
-          value={filters.platform}
-          title="Фильтр по платформе"
-          aria-label="Фильтр по платформе"
-          onChange={(event) => setFilters((current) => ({ ...current, platform: event.target.value }))}
-        >
-          <option value="">Все платформы</option>
-          <option value="Facebook">Facebook</option>
-          <option value="Instagram">Instagram</option>
-          <option value="Messenger">Messenger</option>
-          <option value="Audience Network">Audience Network</option>
-        </select>
         <div className="sort-toggle" role="group" aria-label="Порядок строк">
           <button
             type="button"
@@ -1487,9 +1626,10 @@ export function App() {
           </button>
         </div>
       </section>
+      </div>
 
       <section className="table-section">
-        <div className="table-shell" ref={tableShellRef}>
+        <div className="table-shell" ref={tableShellRef} onScroll={handleTableScroll}>
           <table className="ad-table" style={{ width: tableWidth, minWidth: tableWidth }}>
             <colgroup>
               <col style={{ width: controlColumnWidth }} />
@@ -1546,108 +1686,31 @@ export function App() {
               </tr>
             </thead>
             <tbody>
-              {sortedAds.map((ad) => {
-                const rowHeight = tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id]);
-                const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
-
-                return (
-                  <tr
-                    key={ad.id}
-                    className={['resizable-row', rowBoundaryClass(ad.id), ad.hidden ? 'row-hidden' : '']
-                      .filter(Boolean)
-                      .join(' ')}
-                    style={rowStyle}
-                  >
-                    <td
-                      className={`control-col ${pinnedColumnIndex >= 0 ? 'col-pinned' : ''}`.trim()}
-                      style={pinnedColumnIndex >= 0 ? { left: 0 } : undefined}
-                    >
-                      <div className="cell-content control-cell">{renderAdHideButton(ad)}</div>
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('ad_archive_id')}>
-                      <div className="cell-content mono">{ad.facebook_library_id}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.ad_archive_id)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('company_name')}>
-                      <div className="cell-content">{ad.competitors?.name ?? ad.competitor_id}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.company_name)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('preview')}>
-                      <div className="cell-content">
-                        <PreviewThumb
-                          ad={ad}
-                          onOpen={() => void openPreview(ad)}
-                          onAspectRatio={(aspectRatio) => rememberPreviewAspectRatio(ad.id, aspectRatio)}
-                        />
-                      </div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.preview)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('status')}>
-                      <div className="cell-content">
-                        <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
-                      </div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.status)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('link_url')}>
-                      <div className="cell-content">
-                        <a className="table-link" href={directAdUrl(ad)} target="_blank" rel="noreferrer">
-                      ссылка
-                      <ExternalLink size={14} />
-                        </a>
-                      </div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.link_url)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('start_day')}>
-                      <div className="cell-content">{ad.start_date_text ?? ''}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.start_day)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('stop_day')}>
-                      <div className="cell-content">{stopDay(ad)}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.stop_day)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('days_active')}>
-                      <div className="cell-content number-cell">{daysActive(ad)}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.days_active)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('cta')}>
-                      <div className="cell-content">{ad.cta ?? ''}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.cta)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td {...pinnableCellProps('body_text')}>
-                      <div className="cell-content body-cell">{getAdBodyText(ad)}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.body_text)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td className={columnBoundaryClass('geo')}>
-                      <div className="cell-content">{renderGeoCell(ad)}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.geo)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    <td className={columnBoundaryClass('last_seen_at')}>
-                      <div className="cell-content date-cell">{formatDateTime(ad.last_seen_at)}</div>
-                      {renderColumnBoundaryHandle(tableColumnByKey.last_seen_at)}
-                      {renderRowResizeHandle(ad)}
-                    </td>
-                    {adAiAssessmentKeys.map((key) => (
-                      <td key={key} className={columnBoundaryClass(key)}>
-                        <div className="cell-content body-cell ai-cell">{ad[key] ?? ''}</div>
-                        {renderColumnBoundaryHandle(tableColumnByKey[key])}
-                        {renderRowResizeHandle(ad)}
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
+              {virtualRange.topPad > 0 && (
+                <tr className="virtual-spacer" aria-hidden="true">
+                  <td colSpan={tableColumns.length + 1} style={{ height: virtualRange.topPad }} />
+                </tr>
+              )}
+              {sortedAds.slice(virtualRange.start, virtualRange.end).map((ad, sliceIndex) => (
+                <AdRow
+                  key={ad.id}
+                  ad={ad}
+                  rowHeight={virtualRowHeights[virtualRange.start + sliceIndex]}
+                  pinnedColumnIndex={pinnedColumnIndex}
+                  pinnedLeftOffsets={pinnedLeftOffsets}
+                  activeResizeColumnKey={activeResizeColumnKey}
+                  activeResizeColumnEdge={activeResizeColumnEdge}
+                  activeResizeRowId={activeResizeRowId}
+                  geoLocations={geoByAd[ad.id]}
+                  geoLoading={geoLoading}
+                  handlers={stableRowHandlers}
+                />
+              ))}
+              {virtualRange.bottomPad > 0 && (
+                <tr className="virtual-spacer" aria-hidden="true">
+                  <td colSpan={tableColumns.length + 1} style={{ height: virtualRange.bottomPad }} />
+                </tr>
+              )}
             </tbody>
           </table>
           {!renderedAds.length && (
@@ -1660,6 +1723,8 @@ export function App() {
             </div>
           )}
         </div>
+        <div className="scroll-indicator vertical" ref={vIndicatorRef} aria-hidden="true" />
+        <div className="scroll-indicator horizontal" ref={hIndicatorRef} aria-hidden="true" />
       </section>
 
       {competitorsOpen && (
@@ -1676,6 +1741,207 @@ export function App() {
     </main>
   );
 }
+
+const AdRow = memo(function AdRow({
+  ad,
+  rowHeight,
+  pinnedColumnIndex,
+  pinnedLeftOffsets,
+  activeResizeColumnKey,
+  activeResizeColumnEdge,
+  activeResizeRowId,
+  geoLocations,
+  geoLoading,
+  handlers
+}: {
+  ad: Ad;
+  rowHeight: number;
+  pinnedColumnIndex: number;
+  pinnedLeftOffsets: Record<string, number>;
+  activeResizeColumnKey: string | null;
+  activeResizeColumnEdge: ColumnResizeEdge;
+  activeResizeRowId: string | null;
+  geoLocations: AdLocation[] | undefined;
+  geoLoading: boolean;
+  handlers: RowHandlers;
+}) {
+  const rowStyle = { '--row-height': `${rowHeight}px` } as CSSProperties;
+  const hidden = Boolean(ad.hidden);
+
+  function columnBoundaryClass(columnKey: string) {
+    if (activeResizeColumnKey !== columnKey) return '';
+    return activeResizeColumnEdge === 'left' ? 'column-boundary-left-active' : 'column-boundary-right-active';
+  }
+
+  function pinnedColumnClass(columnKey: string) {
+    if (pinnedColumnIndex < 0) return '';
+    const index = tableColumns.findIndex((column) => column.key === columnKey);
+    if (index < 0 || index > pinnedColumnIndex) return '';
+    return index === pinnedColumnIndex ? 'col-pinned col-pinned-last' : 'col-pinned';
+  }
+
+  function pinnedColumnStyle(columnKey: string): CSSProperties | undefined {
+    const left = pinnedLeftOffsets[columnKey];
+    return left === undefined ? undefined : { left };
+  }
+
+  function cellProps(columnKey: string) {
+    const className = [columnBoundaryClass(columnKey), pinnedColumnClass(columnKey)].filter(Boolean).join(' ');
+    return { className: className || undefined, style: pinnedColumnStyle(columnKey) };
+  }
+
+  function boundaryHandle(column: TableColumn) {
+    if (tableColumns.findIndex((candidate) => candidate.key === column.key) <= 0) return null;
+    return (
+      <span
+        className="column-resize-handle left-edge"
+        role="separator"
+        aria-orientation="vertical"
+        tabIndex={0}
+        onMouseEnter={() => handlers.onColumnHandleEnter(column.key, 'left')}
+        onMouseLeave={() => handlers.onColumnHandleLeave(column.key, 'left')}
+        onMouseDown={(event) => handlers.onColumnResizeStart(event, column, 'left')}
+      />
+    );
+  }
+
+  function rowHandle() {
+    return (
+      <span
+        className="row-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        tabIndex={0}
+        onMouseEnter={() => handlers.onRowHandleEnter(ad.id)}
+        onMouseLeave={() => handlers.onRowHandleLeave(ad.id)}
+        onMouseDown={(event) => handlers.onRowResizeStart(event, ad)}
+      />
+    );
+  }
+
+  function geoCell() {
+    if (geoLocations === undefined) {
+      return geoLoading ? (
+        <span className="geo-loading">
+          <Loader2 size={14} className="spin" />
+        </span>
+      ) : null;
+    }
+    if (!geoLocations.length) return null;
+    return (
+      <button type="button" className="geo-button" onClick={() => handlers.onOpenGeo(ad)}>
+        <MapPinned size={15} />
+        geo
+      </button>
+    );
+  }
+
+  return (
+    <tr
+      className={['resizable-row', activeResizeRowId === ad.id ? 'row-boundary-active' : '', hidden ? 'row-hidden' : '']
+        .filter(Boolean)
+        .join(' ')}
+      style={rowStyle}
+    >
+      <td
+        className={`control-col ${pinnedColumnIndex >= 0 ? 'col-pinned' : ''}`.trim()}
+        style={pinnedColumnIndex >= 0 ? { left: 0 } : undefined}
+      >
+        <div className="cell-content control-cell">
+          <button
+            type="button"
+            className={`row-hide-button ${hidden ? 'is-hidden' : ''}`.trim()}
+            onClick={() => handlers.onToggleHidden(ad, !hidden)}
+            title={hidden ? 'Вернуть объявление в таблицу' : 'Скрыть объявление из таблицы'}
+          >
+            {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        {rowHandle()}
+      </td>
+      <td {...cellProps('ad_archive_id')}>
+        <div className="cell-content mono">{ad.facebook_library_id}</div>
+        {boundaryHandle(tableColumnByKey.ad_archive_id)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('company_name')}>
+        <div className="cell-content">{ad.competitors?.name ?? ad.competitor_id}</div>
+        {boundaryHandle(tableColumnByKey.company_name)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('preview')}>
+        <div className="cell-content">
+          <PreviewThumb
+            ad={ad}
+            onOpen={() => handlers.onOpenPreview(ad)}
+            onAspectRatio={(aspectRatio) => handlers.onAspectRatio(ad.id, aspectRatio)}
+          />
+        </div>
+        {boundaryHandle(tableColumnByKey.preview)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('status')}>
+        <div className="cell-content">
+          <span className={`status-pill ${ad.status}`}>{statusLabels[ad.status] ?? ad.status}</span>
+        </div>
+        {boundaryHandle(tableColumnByKey.status)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('link_url')}>
+        <div className="cell-content">
+          <a className="table-link" href={directAdUrl(ad)} target="_blank" rel="noreferrer">
+            ссылка
+            <ExternalLink size={14} />
+          </a>
+        </div>
+        {boundaryHandle(tableColumnByKey.link_url)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('start_day')}>
+        <div className="cell-content">{ad.start_date_text ?? ''}</div>
+        {boundaryHandle(tableColumnByKey.start_day)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('stop_day')}>
+        <div className="cell-content">{stopDay(ad)}</div>
+        {boundaryHandle(tableColumnByKey.stop_day)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('days_active')}>
+        <div className="cell-content number-cell">{daysActive(ad)}</div>
+        {boundaryHandle(tableColumnByKey.days_active)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('cta')}>
+        <div className="cell-content">{ad.cta ?? ''}</div>
+        {boundaryHandle(tableColumnByKey.cta)}
+        {rowHandle()}
+      </td>
+      <td {...cellProps('body_text')}>
+        <div className="cell-content body-cell">{getAdBodyText(ad)}</div>
+        {boundaryHandle(tableColumnByKey.body_text)}
+        {rowHandle()}
+      </td>
+      <td className={columnBoundaryClass('geo')}>
+        <div className="cell-content">{geoCell()}</div>
+        {boundaryHandle(tableColumnByKey.geo)}
+        {rowHandle()}
+      </td>
+      <td className={columnBoundaryClass('last_seen_at')}>
+        <div className="cell-content date-cell">{formatDateTime(ad.last_seen_at)}</div>
+        {boundaryHandle(tableColumnByKey.last_seen_at)}
+        {rowHandle()}
+      </td>
+      {adAiAssessmentKeys.map((key) => (
+        <td key={key} className={columnBoundaryClass(key)}>
+          <div className="cell-content body-cell ai-cell">{ad[key] ?? ''}</div>
+          {boundaryHandle(tableColumnByKey[key])}
+          {rowHandle()}
+        </td>
+      ))}
+    </tr>
+  );
+});
 
 function CompetitorMultiSelect({
   competitors,
@@ -2064,7 +2330,7 @@ function PreviewThumb({
       title="Открыть превью"
     >
       {imageUrl ? (
-        <img src={imageUrl} alt="" referrerPolicy="origin-when-cross-origin" loading="lazy" />
+        <img src={imageUrl} alt="" referrerPolicy="origin-when-cross-origin" loading="lazy" decoding="async" />
       ) : (
         <span className="preview-placeholder">{primary?.type === 'video' ? 'video' : 'нет картинки'}</span>
       )}
@@ -2106,8 +2372,7 @@ function PreviewModal({ ad, onClose }: { ad: Ad; onClose: () => void }) {
 }
 
 function GeoDrawer({ ad, onClose }: { ad: Ad; onClose: () => void }) {
-  const locations = ad.ad_locations ?? [];
-  const ageGroups = extractAgeGroups(locations);
+  const { included, excluded } = groupGeoCountries(ad.ad_locations ?? []);
 
   return (
     <div className="drawer-backdrop">
@@ -2124,31 +2389,41 @@ function GeoDrawer({ ad, onClose }: { ad: Ad; onClose: () => void }) {
 
         <section className="geo-summary">
           <div>
-            <span>Всего строк гео</span>
-            <strong>{locations.length}</strong>
+            <span>Включено стран</span>
+            <strong>{included.length}</strong>
           </div>
-          <div>
-            <span>Возрастные группы</span>
-            <strong>{ageGroups.length ? ageGroups.join(', ') : 'не найдены'}</strong>
-          </div>
+          {excluded.length > 0 && (
+            <div>
+              <span>Исключено стран</span>
+              <strong>{excluded.length}</strong>
+            </div>
+          )}
         </section>
 
         <section>
           <div className="locations-table">
             <div className="locations-head">
-              <span>geo</span>
-              <span>type</span>
-              <span>include/exclude</span>
+              <span>Включенные страны</span>
             </div>
-            {locations.map((location) => (
-              <div key={location.id}>
-                <span>{location.location}</span>
-                <span>{location.location_type || '-'}</span>
-                <span>{location.visibility || '-'}</span>
+            {included.map((country) => (
+              <div key={country}>
+                <span>{country}</span>
               </div>
             ))}
-            {!locations.length && <p>Гео пока не сохранено.</p>}
+            {!included.length && <p>Гео пока не сохранено.</p>}
           </div>
+          {excluded.length > 0 && (
+            <div className="locations-table">
+              <div className="locations-head excluded-head">
+                <span>Исключенные страны</span>
+              </div>
+              {excluded.map((country) => (
+                <div key={country}>
+                  <span>{country}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </aside>
     </div>
