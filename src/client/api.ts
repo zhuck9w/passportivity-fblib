@@ -103,6 +103,19 @@ export function setAdHidden(id: string, hidden: boolean) {
   });
 }
 
+export function bulkSetAdHidden(ids: string[], hidden: boolean) {
+  return api<{ updated: number; ids: string[] }>('/api/ads/bulk-hidden', {
+    method: 'POST',
+    body: JSON.stringify({ ids, hidden })
+  });
+}
+
+// URL of the same-origin image proxy (see interface.ts). Used by the Excel export to
+// pull Facebook CDN previews as same-origin bytes (no CORS / no tainted canvas).
+export function imageProxyUrl(url: string) {
+  return `${API_BASE}/api/image-proxy?url=${encodeURIComponent(url)}`;
+}
+
 export function fetchAdLocations(ids: string[]) {
   return api<Record<string, AdLocation[]>>('/api/ad-locations', {
     method: 'POST',

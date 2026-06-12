@@ -332,6 +332,13 @@ export async function setAdHidden(id: string, hidden: boolean) {
   return throwIfError<Ad>(result);
 }
 
+export async function bulkSetAdHidden(ids: string[], hidden: boolean) {
+  if (!ids.length) return { updated: 0, ids: [] as string[] };
+  const result = await supabase.from('ads').update({ hidden }).in('id', ids).select('id');
+  const rows = throwIfError<Array<Pick<Ad, 'id'>>>(result);
+  return { updated: rows.length, ids: rows.map((row) => row.id) };
+}
+
 export async function listAdLocations(adIds: string[]) {
   const grouped: Record<string, AdLocation[]> = {};
   if (!adIds.length) return grouped;

@@ -757,6 +757,89 @@ select,
   box-shadow: inset 2px 0 0 #1769e0;
 }
 
+/* --- Selection mode --- */
+
+.select-checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+  cursor: pointer;
+  accent-color: #1769e0;
+}
+
+.select-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Selected rows win over the hidden-row tint; pinned cells repaint to match. */
+.ad-table tbody tr.row-selected {
+  background: #eaf2fe;
+}
+
+.ad-table tbody tr.row-selected:hover {
+  background: #ddeafd;
+}
+
+.ad-table tbody tr.row-selected td.col-pinned {
+  background: #eaf2fe;
+}
+
+.ad-table tbody tr.row-selected:hover td.col-pinned {
+  background: #ddeafd;
+}
+
+.selection-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selection-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.selection-actions {
+  margin-left: auto;
+}
+
+.selection-count {
+  font-size: 14px;
+  color: #44525c;
+  white-space: nowrap;
+}
+
+.selection-count strong {
+  color: #172026;
+}
+
+.selection-link {
+  border: 0;
+  background: transparent;
+  color: #1769e0;
+  font-size: 14px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.selection-link:hover:not(:disabled) {
+  background: #eaf2fe;
+}
+
+.selection-link:disabled {
+  color: #9aa7b0;
+  cursor: not-allowed;
+}
+
+.select-mode-button {
+  margin-left: auto;
+}
+
 .column-boundary-right-active .column-resize-handle.right-edge::after,
 .column-boundary-left-active .column-resize-handle.left-edge::after {
   background: #1769e0;
@@ -1504,6 +1587,30 @@ select,
   }
 
   .toolbar .sort-toggle {
+    flex: 1 1 100%;
+  }
+
+  .selection-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .selection-group {
+    width: 100%;
+  }
+
+  .selection-actions {
+    margin-left: 0;
+  }
+
+  .selection-actions > .secondary-button,
+  .selection-actions > .primary-button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .select-mode-button {
+    margin-left: 0;
     flex: 1 1 100%;
   }
 

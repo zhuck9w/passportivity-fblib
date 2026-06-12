@@ -3,10 +3,12 @@ import {
   ChevronDown,
   CirclePause,
   Database,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
   Filter,
+  ListChecks,
   Loader2,
   MapPinned,
   Menu,
@@ -37,6 +39,7 @@ import { adAiAssessmentKeys } from '../shared/types';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot } from '../shared/types';
 import {
   bulkCreateCompetitors,
+  bulkSetAdHidden,
   createCompetitor,
   deleteCompetitor,
   fetchAd,
@@ -44,11 +47,13 @@ import {
   fetchAds,
   fetchCompetitors,
   fetchJob,
+  imageProxyUrl,
   setAdHidden,
   startScrape,
   stopScrape,
   updateCompetitor
 } from './api';
+import { type XlsxColumn, type XlsxRow, exportToXlsx } from './excelExport';
 
 type Filters = {
   competitorIds: string[];
@@ -102,6 +107,7 @@ type RowHandlers = {
   onRowHandleLeave: (adId: string) => void;
   onRowResizeStart: (event: ReactMouseEvent, ad: Ad) => void;
   onToggleHidden: (ad: Ad, hidden: boolean) => void;
+  onToggleSelect: (ad: Ad, index: number, shiftKey: boolean) => void;
   onOpenPreview: (ad: Ad) => void;
   onOpenGeo: (ad: Ad) => void;
   onAspectRatio: (adId: string, aspectRatio: number | null) => void;
@@ -893,6 +899,55 @@ function friendlyCompetitorError(message: string) {
   return message;
 }
 
+// Excel export mirrors the on-screen table 1:1: same columns, preview as an embedded image,
+// link_url as a clickable hyperlink. px column widths are mapped to Excel's character units.
+const exportColumns: XlsxColumn[] = tableColumns.map((column) => ({
+  key: column.key,
+  header: column.label,
+  width: column.key === 'body_text' ? 64 : clampNumber(Math.round(column.width / 7), 12, 48),
+  kind: column.key === 'preview' ? 'image' : column.key === 'link_url' ? 'link' : 'text'
+}));
+
+function buildAdExportRows(adsToExport: Ad[], geoByAd: Record<string, AdLocation[]>): XlsxRow[] {
+  return adsToExport.map((ad) => {
+    const { included, excluded } = groupGeoCountries(geoByAd[ad.id] ?? ad.ad_locations ?? []);
+    const geoText = [
+      included.length ? `Включено: ${included.join(', ')}` : '',
+      excluded.length ? `Исключено: ${excluded.join(', ')}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const values: Record<string, string> = {
+      ad_archive_id: ad.facebook_library_id,
+      company_name: ad.competitors?.name ?? ad.competitor_id,
+      preview: '',
+      status: statusLabels[ad.status] ?? ad.status,
+      link_url: 'Открыть объявление',
+      start_day: ad.start_date_text ?? '',
+      stop_day: stopDay(ad),
+      days_active: daysActive(ad),
+      cta: ad.cta ?? '',
+      body_text: getAdBodyText(ad),
+      geo: geoText,
+      last_seen_at: formatDateTime(ad.last_seen_at)
+    };
+    for (const key of adAiAssessmentKeys) values[key] = ad[key] ?? '';
+
+    return { values, imageUrl: primaryPreviewMediaSrc(ad), linkUrl: directAdUrl(ad) };
+  });
+}
+
+async function fetchImageBuffer(url: string): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetch(imageProxyUrl(url));
+    if (!response.ok) return null;
+    return await response.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
 export function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
@@ -929,6 +984,14 @@ export function App() {
   const [job, setJob] = useState<ScrapeJobSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkHiding, setBulkHiding] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null);
+  // Anchor for shift-click range selection; sortedAds mirror lets stable handlers read the
+  // current ordered list without re-creating the memoized row callbacks.
+  const selectionAnchorRef = useRef<number | null>(null);
+  const sortedAdsRef = useRef<Ad[]>([]);
 
   async function refresh() {
     setLoading(true);
@@ -978,6 +1041,17 @@ export function App() {
   }, [sortMode]);
 
   const adIdsKey = useMemo(() => ads.map((ad) => ad.id).join(','), [ads]);
+
+  // Forget selected ids whose ads dropped out of the result set (refresh / filter change).
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (!current.size) return current;
+      const present = new Set(ads.map((ad) => ad.id));
+      const next = new Set<string>();
+      for (const id of current) if (present.has(id)) next.add(id);
+      return next.size === current.size ? current : next;
+    });
+  }, [adIdsKey]);
 
   useEffect(() => {
     const ids = adIdsKey ? adIdsKey.split(',') : [];
@@ -1289,6 +1363,15 @@ export function App() {
     return [...fresh, ...renderedAds.filter((ad) => ad.status !== 'new')];
   }, [renderedAds, sortMode]);
 
+  // Mirror the current ordered list for the stable row handlers (shift-range, select-all).
+  sortedAdsRef.current = sortedAds;
+  const selectedCount = useMemo(
+    () => sortedAds.reduce((sum, ad) => (selectedIds.has(ad.id) ? sum + 1 : sum), 0),
+    [sortedAds, selectedIds]
+  );
+  const allRenderedSelected = sortedAds.length > 0 && selectedCount === sortedAds.length;
+  const someRenderedSelected = selectedCount > 0 && !allRenderedSelected;
+
   // Row virtualization: only rows near the viewport are mounted; the rest is replaced by
   // two spacer rows so scroll geometry stays intact. Row heights are known up front.
   const virtualRowHeights = useMemo(
@@ -1470,6 +1553,97 @@ export function App() {
     });
   }
 
+  function enterSelectionMode() {
+    setSelectionMode(true);
+    // On mobile the controls live behind the burger — open it so the action bar is visible.
+    setMobileMenuOpen(true);
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    selectionAnchorRef.current = null;
+  }
+
+  function handleClearSelection() {
+    setSelectedIds(new Set());
+    selectionAnchorRef.current = null;
+  }
+
+  function handleSelectAllRendered() {
+    setSelectedIds(new Set(sortedAdsRef.current.map((ad) => ad.id)));
+  }
+
+  function handleToggleSelectAll() {
+    const list = sortedAdsRef.current;
+    const everySelected = list.length > 0 && list.every((ad) => selectedIds.has(ad.id));
+    if (everySelected) handleClearSelection();
+    else handleSelectAllRendered();
+  }
+
+  // Single click toggles one row; shift-click selects the whole range from the last anchor
+  // (Gmail / file-manager style), so large contiguous spans take two clicks.
+  function handleToggleSelect(ad: Ad, index: number, shiftKey: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      const anchor = selectionAnchorRef.current;
+      if (shiftKey && anchor !== null && anchor !== index) {
+        const list = sortedAdsRef.current;
+        const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+        for (let cursor = from; cursor <= to; cursor += 1) {
+          const item = list[cursor];
+          if (item) next.add(item.id);
+        }
+      } else if (next.has(ad.id)) {
+        next.delete(ad.id);
+      } else {
+        next.add(ad.id);
+      }
+      return next;
+    });
+    selectionAnchorRef.current = index;
+  }
+
+  async function handleBulkHide() {
+    const ids = sortedAdsRef.current.filter((ad) => selectedIds.has(ad.id)).map((ad) => ad.id);
+    if (!ids.length || bulkHiding) return;
+    const idSet = new Set(ids);
+    setBulkHiding(true);
+    setError(null);
+    setAds((current) => current.map((ad) => (idSet.has(ad.id) ? { ...ad, hidden: true } : ad)));
+    try {
+      await bulkSetAdHidden(ids, true);
+      handleClearSelection();
+    } catch (requestError) {
+      setAds((current) => current.map((ad) => (idSet.has(ad.id) ? { ...ad, hidden: false } : ad)));
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setBulkHiding(false);
+    }
+  }
+
+  async function handleExportSelected() {
+    const adsToExport = sortedAdsRef.current.filter((ad) => selectedIds.has(ad.id));
+    if (!adsToExport.length || exportProgress) return;
+    setError(null);
+    setExportProgress({ done: 0, total: adsToExport.length });
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await exportToXlsx({
+        fileName: `ad-library-${stamp}.xlsx`,
+        sheetName: 'Объявления',
+        columns: exportColumns,
+        rows: buildAdExportRows(adsToExport, geoByAd),
+        resolveImage: fetchImageBuffer,
+        onProgress: (done, total) => setExportProgress({ done, total })
+      });
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setExportProgress(null);
+    }
+  }
+
   const rowHandlersRef = useRef<RowHandlers>(null!);
   rowHandlersRef.current = {
     onColumnHandleEnter: scheduleColumnHover,
@@ -1487,6 +1661,7 @@ export function App() {
     },
     onRowResizeStart: handleRowResizeStart,
     onToggleHidden: handleToggleAdHidden,
+    onToggleSelect: handleToggleSelect,
     onOpenPreview: (ad) => void openPreview(ad),
     onOpenGeo: (ad) => void openGeo(ad),
     onAspectRatio: rememberPreviewAspectRatio
@@ -1500,6 +1675,7 @@ export function App() {
       onRowHandleLeave: (adId) => rowHandlersRef.current.onRowHandleLeave(adId),
       onRowResizeStart: (event, ad) => rowHandlersRef.current.onRowResizeStart(event, ad),
       onToggleHidden: (ad, hidden) => rowHandlersRef.current.onToggleHidden(ad, hidden),
+      onToggleSelect: (ad, index, shiftKey) => rowHandlersRef.current.onToggleSelect(ad, index, shiftKey),
       onOpenPreview: (ad) => rowHandlersRef.current.onOpenPreview(ad),
       onOpenGeo: (ad) => rowHandlersRef.current.onOpenGeo(ad),
       onAspectRatio: (adId, ratio) => rowHandlersRef.current.onAspectRatio(adId, ratio)
@@ -1580,52 +1756,121 @@ export function App() {
           <Metric icon={<Filter size={18} />} label="Активных в таблице" value={counters.active} />
         </section>
 
-      <section className="toolbar">
-        <label className="search-box">
-          <Search size={17} />
-          <input
-            value={filters.q}
-            onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-            placeholder="Поиск по body_text"
+      {selectionMode ? (
+        <section className="toolbar selection-toolbar" aria-label="Действия с выбранными объявлениями">
+          <div className="selection-group">
+            <SelectAllCheckbox
+              checked={allRenderedSelected}
+              indeterminate={someRenderedSelected}
+              disabled={!sortedAds.length}
+              onToggle={handleToggleSelectAll}
+            />
+            <span className="selection-count">
+              Выбрано <strong>{selectedCount}</strong> из {sortedAds.length}
+            </span>
+            <button
+              type="button"
+              className="selection-link"
+              onClick={handleSelectAllRendered}
+              disabled={!sortedAds.length || allRenderedSelected}
+            >
+              Выбрать все
+            </button>
+            <button type="button" className="selection-link" onClick={handleClearSelection} disabled={!selectedCount}>
+              Снять все
+            </button>
+          </div>
+          <div className="selection-group selection-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void handleBulkHide()}
+              disabled={!selectedCount || bulkHiding}
+              title="Скрыть выбранные объявления из таблицы"
+            >
+              {bulkHiding ? <Loader2 size={17} className="spin" /> : <EyeOff size={17} />}
+              Скрыть{selectedCount ? ` (${selectedCount})` : ''}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void handleExportSelected()}
+              disabled={!selectedCount || Boolean(exportProgress)}
+              title="Выгрузить выбранные объявления в Excel (.xlsx) с превью и ссылкой"
+            >
+              {exportProgress ? <Loader2 size={17} className="spin" /> : <Download size={17} />}
+              {exportProgress
+                ? `Экспорт… ${exportProgress.done}/${exportProgress.total}`
+                : `Экспорт в Excel${selectedCount ? ` (${selectedCount})` : ''}`}
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={exitSelectionMode}
+              title="Выйти из режима выделения"
+              aria-label="Выйти из режима выделения"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section className="toolbar">
+          <label className="search-box">
+            <Search size={17} />
+            <input
+              value={filters.q}
+              onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+              placeholder="Поиск по body_text"
+            />
+          </label>
+          <CompetitorMultiSelect
+            competitors={competitors}
+            selectedIds={filters.competitorIds}
+            onChange={(competitorIds) => setFilters((current) => ({ ...current, competitorIds }))}
           />
-        </label>
-        <CompetitorMultiSelect
-          competitors={competitors}
-          selectedIds={filters.competitorIds}
-          onChange={(competitorIds) => setFilters((current) => ({ ...current, competitorIds }))}
-        />
-        <select
-          value={filters.status}
-          title="Фильтр по статусу"
-          aria-label="Фильтр по статусу"
-          onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
-        >
-          <option value="">Любой статус</option>
-          <option value="active">Активно + new</option>
-          <option value="new">NEW</option>
-          <option value="stopped">Остановлено</option>
-          <option value="inactive">Inactive</option>
-          <option value="unknown">Неизвестно</option>
-        </select>
-        <div className="sort-toggle" role="group" aria-label="Порядок строк">
+          <select
+            value={filters.status}
+            title="Фильтр по статусу"
+            aria-label="Фильтр по статусу"
+            onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
+          >
+            <option value="">Любой статус</option>
+            <option value="active">Активно + new</option>
+            <option value="new">NEW</option>
+            <option value="stopped">Остановлено</option>
+            <option value="inactive">Inactive</option>
+            <option value="unknown">Неизвестно</option>
+          </select>
+          <div className="sort-toggle" role="group" aria-label="Порядок строк">
+            <button
+              type="button"
+              className={sortMode === 'company' ? 'active' : ''}
+              title="Как собрано: строки идут подряд по компаниям"
+              onClick={() => setSortMode('company')}
+            >
+              По компаниям
+            </button>
+            <button
+              type="button"
+              className={sortMode === 'new-first' ? 'active' : ''}
+              title="Сначала все NEW, независимо от компании"
+              onClick={() => setSortMode('new-first')}
+            >
+              NEW сверху
+            </button>
+          </div>
           <button
             type="button"
-            className={sortMode === 'company' ? 'active' : ''}
-            title="Как собрано: строки идут подряд по компаниям"
-            onClick={() => setSortMode('company')}
+            className="secondary-button select-mode-button"
+            onClick={enterSelectionMode}
+            title="Режим выделения: отметить объявления и выполнить действия"
           >
-            По компаниям
+            <ListChecks size={18} />
+            Выделить
           </button>
-          <button
-            type="button"
-            className={sortMode === 'new-first' ? 'active' : ''}
-            title="Сначала все NEW, независимо от компании"
-            onClick={() => setSortMode('new-first')}
-          >
-            NEW сверху
-          </button>
-        </div>
-      </section>
+        </section>
+      )}
       </div>
 
       <section className="table-section">
@@ -1643,18 +1888,29 @@ export function App() {
                   className={`control-col ${pinnedColumnIndex >= 0 ? 'col-pinned' : ''}`.trim()}
                   style={pinnedColumnIndex >= 0 ? { width: controlColumnWidth, left: 0 } : { width: controlColumnWidth }}
                 >
-                  <button
-                    type="button"
-                    className={`control-toggle ${revealHidden ? 'is-revealing' : ''}`.trim()}
-                    onClick={() => setRevealHidden((value) => !value)}
-                    title={
-                      revealHidden
-                        ? `Скрыть скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
-                        : `Показать скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
-                    }
-                  >
-                    {revealHidden ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
+                  {selectionMode ? (
+                    <div className="control-cell">
+                      <SelectAllCheckbox
+                        checked={allRenderedSelected}
+                        indeterminate={someRenderedSelected}
+                        disabled={!sortedAds.length}
+                        onToggle={handleToggleSelectAll}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`control-toggle ${revealHidden ? 'is-revealing' : ''}`.trim()}
+                      onClick={() => setRevealHidden((value) => !value)}
+                      title={
+                        revealHidden
+                          ? `Скрыть скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
+                          : `Показать скрытые объявления${hiddenCount ? ` (${hiddenCount})` : ''}`
+                      }
+                    >
+                      {revealHidden ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  )}
                 </th>
                 {tableColumns.map((column, columnIndex) => (
                   <th
@@ -1695,7 +1951,10 @@ export function App() {
                 <AdRow
                   key={ad.id}
                   ad={ad}
+                  rowIndex={virtualRange.start + sliceIndex}
                   rowHeight={virtualRowHeights[virtualRange.start + sliceIndex]}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(ad.id)}
                   pinnedColumnIndex={pinnedColumnIndex}
                   pinnedLeftOffsets={pinnedLeftOffsets}
                   activeResizeColumnKey={activeResizeColumnKey}
@@ -1744,7 +2003,10 @@ export function App() {
 
 const AdRow = memo(function AdRow({
   ad,
+  rowIndex,
   rowHeight,
+  selectionMode,
+  selected,
   pinnedColumnIndex,
   pinnedLeftOffsets,
   activeResizeColumnKey,
@@ -1755,7 +2017,10 @@ const AdRow = memo(function AdRow({
   handlers
 }: {
   ad: Ad;
+  rowIndex: number;
   rowHeight: number;
+  selectionMode: boolean;
+  selected: boolean;
   pinnedColumnIndex: number;
   pinnedLeftOffsets: Record<string, number>;
   activeResizeColumnKey: string | null;
@@ -1838,7 +2103,12 @@ const AdRow = memo(function AdRow({
 
   return (
     <tr
-      className={['resizable-row', activeResizeRowId === ad.id ? 'row-boundary-active' : '', hidden ? 'row-hidden' : '']
+      className={[
+        'resizable-row',
+        activeResizeRowId === ad.id ? 'row-boundary-active' : '',
+        hidden ? 'row-hidden' : '',
+        selected ? 'row-selected' : ''
+      ]
         .filter(Boolean)
         .join(' ')}
       style={rowStyle}
@@ -1848,14 +2118,25 @@ const AdRow = memo(function AdRow({
         style={pinnedColumnIndex >= 0 ? { left: 0 } : undefined}
       >
         <div className="cell-content control-cell">
-          <button
-            type="button"
-            className={`row-hide-button ${hidden ? 'is-hidden' : ''}`.trim()}
-            onClick={() => handlers.onToggleHidden(ad, !hidden)}
-            title={hidden ? 'Вернуть объявление в таблицу' : 'Скрыть объявление из таблицы'}
-          >
-            {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
+          {selectionMode ? (
+            <input
+              type="checkbox"
+              className="select-checkbox"
+              checked={selected}
+              readOnly
+              aria-label={selected ? 'Снять выделение объявления' : 'Выделить объявление'}
+              onClick={(event) => handlers.onToggleSelect(ad, rowIndex, event.shiftKey)}
+            />
+          ) : (
+            <button
+              type="button"
+              className={`row-hide-button ${hidden ? 'is-hidden' : ''}`.trim()}
+              onClick={() => handlers.onToggleHidden(ad, !hidden)}
+              title={hidden ? 'Вернуть объявление в таблицу' : 'Скрыть объявление из таблицы'}
+            >
+              {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          )}
         </div>
         {rowHandle()}
       </td>
@@ -1942,6 +2223,40 @@ const AdRow = memo(function AdRow({
     </tr>
   );
 });
+
+// Tri-state master checkbox: checked when all rendered rows are selected, indeterminate when
+// only some are. `readOnly` + onClick keeps it controlled while exposing the native click.
+function SelectAllCheckbox({
+  checked,
+  indeterminate,
+  disabled,
+  onToggle
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate && !checked;
+  }, [indeterminate, checked]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="select-checkbox"
+      checked={checked}
+      disabled={disabled}
+      readOnly
+      title={checked ? 'Снять выделение со всех' : 'Выделить все объявления'}
+      aria-label={checked ? 'Снять выделение со всех' : 'Выделить все объявления'}
+      onClick={onToggle}
+    />
+  );
+}
 
 function CompetitorMultiSelect({
   competitors,

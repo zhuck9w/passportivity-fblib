@@ -6,6 +6,7 @@ import { asyncRoute, errorHandler, routeParam } from './httpUtils';
 import { logServer } from './logger';
 import {
   bulkCreateCompetitors,
+  bulkSetAdHidden,
   createCompetitor,
   deleteCompetitor,
   getAd,
@@ -40,9 +41,24 @@ const adUpdateSchema = z.object({
   hidden: z.boolean()
 });
 
+const adBulkHiddenSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(1000),
+  hidden: z.boolean()
+});
+
 const adLocationsSchema = z.object({
   ids: z.array(z.string().uuid()).max(500)
 });
+
+// Image proxy: the table previews live on Facebook's CDN, which doesn't send CORS
+// headers, so the browser can't read their bytes for the Excel export. We fetch them
+// server-side (no CORS) and serve them same-origin. Host allowlist guards against SSRF.
+const allowedImageHostSuffixes = ['fbcdn.net', 'facebook.com', 'cdninstagram.com'];
+const maxProxyImageBytes = 20 * 1024 * 1024;
+
+function isAllowedImageHost(hostname: string) {
+  return allowedImageHostSuffixes.some((suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`));
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -113,6 +129,51 @@ app.post(
   asyncRoute(async (req, res) => {
     const { ids } = adLocationsSchema.parse(req.body ?? {});
     res.json(await listAdLocations(ids));
+  })
+);
+
+app.post(
+  '/api/ads/bulk-hidden',
+  asyncRoute(async (req, res) => {
+    const { ids, hidden } = adBulkHiddenSchema.parse(req.body);
+    res.json(await bulkSetAdHidden(ids, hidden));
+  })
+);
+
+app.get(
+  '/api/image-proxy',
+  asyncRoute(async (req, res) => {
+    let target: URL;
+    try {
+      target = new URL(String(req.query.url ?? ''));
+    } catch {
+      res.status(400).json({ error: 'Некорректный url' });
+      return;
+    }
+
+    if (target.protocol !== 'https:' || !isAllowedImageHost(target.hostname)) {
+      res.status(400).json({ error: 'Домен изображения не разрешен' });
+      return;
+    }
+
+    const upstream = await fetch(target.toString(), {
+      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'image/*' }
+    });
+    const contentType = upstream.headers.get('content-type') ?? '';
+    if (!upstream.ok || !contentType.startsWith('image/')) {
+      res.status(502).json({ error: `Не удалось загрузить изображение (${upstream.status})` });
+      return;
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.byteLength > maxProxyImageBytes) {
+      res.status(413).json({ error: 'Изображение слишком большое' });
+      return;
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(buffer);
   })
 );
 
