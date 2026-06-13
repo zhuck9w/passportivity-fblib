@@ -339,6 +339,63 @@ export async function bulkSetAdHidden(ids: string[], hidden: boolean) {
   return { updated: rows.length, ids: rows.map((row) => row.id) };
 }
 
+// --- Image dedup (see src/server/imageDedup.ts) ---
+
+export type CanonicalImageAd = Pick<
+  Ad,
+  'id' | 'image_phash' | 'image_aspect' | 'dedup_locked' | 'status' | 'start_date_text' | 'end_date_text' | 'stopped_at'
+>;
+
+export async function setAdImageFingerprint(id: string, imagePhash: string, imageAspect: number) {
+  const result = await supabase
+    .from('ads')
+    .update({ image_phash: imagePhash, image_aspect: imageAspect })
+    .eq('id', id);
+  throwIfError<null>(result as { data: null; error: { message: string } | null });
+}
+
+// Canonical (non-duplicate) image ads of a competitor — the candidates new creatives are
+// matched against. Includes user-locked ads (still canonical, just never re-hidden).
+export async function listCompetitorCanonicalImages(competitorId: string) {
+  const result = await supabase
+    .from('ads')
+    .select('id, image_phash, image_aspect, dedup_locked, status, start_date_text, end_date_text, stopped_at')
+    .eq('competitor_id', competitorId)
+    .is('duplicate_of', null)
+    .not('image_phash', 'is', null);
+  return throwIfError<CanonicalImageAd[]>(result);
+}
+
+export async function markAdAsDuplicate(duplicateId: string, canonicalId: string) {
+  const result = await supabase
+    .from('ads')
+    .update({ hidden: true, duplicate_of: canonicalId, updated_at: new Date().toISOString() })
+    .eq('id', duplicateId);
+  throwIfError<null>(result as { data: null; error: { message: string } | null });
+}
+
+// When a longer-running creative is promoted to canonical, re-point the demoted one's
+// existing duplicates to the new canonical so the group stays flat (no dup-of-a-dup chains).
+export async function repointDuplicates(fromCanonicalId: string, toCanonicalId: string) {
+  const result = await supabase
+    .from('ads')
+    .update({ duplicate_of: toCanonicalId, updated_at: new Date().toISOString() })
+    .eq('duplicate_of', fromCanonicalId);
+  throwIfError<null>(result as { data: null; error: { message: string } | null });
+}
+
+// User override from the duplicates view: keep this creative visible and lock it so the
+// scraper never hides it as a duplicate again.
+export async function unmarkAdDuplicate(id: string) {
+  const result = await supabase
+    .from('ads')
+    .update({ hidden: false, duplicate_of: null, dedup_locked: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*, competitors(id, name, facebook_page_id)')
+    .single();
+  return throwIfError<Ad>(result);
+}
+
 export async function listAdLocations(adIds: string[]) {
   const grouped: Record<string, AdLocation[]> = {};
   if (!adIds.length) return grouped;

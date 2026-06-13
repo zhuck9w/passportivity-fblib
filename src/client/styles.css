@@ -915,6 +915,12 @@ select,
   margin-left: auto;
 }
 
+.view-toggle-button.active {
+  border-color: #1769e0;
+  color: #1255b5;
+  background: #eaf2fe;
+}
+
 .column-boundary-right-active .column-resize-handle.right-edge::after,
 .column-boundary-left-active .column-resize-handle.left-edge::after {
   background: #1769e0;

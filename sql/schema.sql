@@ -44,6 +44,10 @@ create table if not exists public.ads (
   dedupe_key text not null,
   duplicate_count integer not null default 1,
   hidden boolean not null default false,
+  image_phash text,
+  image_aspect double precision,
+  duplicate_of uuid,
+  dedup_locked boolean not null default false,
   ai_main_object text,
   ai_main_color text,
   ai_jtbd text,
@@ -159,6 +163,18 @@ alter table public.ads add column if not exists first_seen_scan_id uuid;
 alter table public.ads add column if not exists last_seen_scan_id uuid;
 alter table public.ads add column if not exists stopped_scan_id uuid;
 alter table public.ads add column if not exists stopped_at timestamptz;
+-- Image dedup (perceptual hashing): image_phash = 64-bit pHash, image_aspect = w/h,
+-- duplicate_of = canonical ad this one duplicates (null = canonical/unique),
+-- dedup_locked = user marked it visible, so the scraper must never re-hide it as a dup.
+alter table public.ads add column if not exists image_phash text;
+alter table public.ads add column if not exists image_aspect double precision;
+alter table public.ads add column if not exists duplicate_of uuid;
+alter table public.ads add column if not exists dedup_locked boolean not null default false;
+
+-- Created after the columns above so re-running on an existing DB (where the table isn't
+-- recreated) doesn't index a column that doesn't exist yet.
+create index if not exists ads_competitor_phash_idx on public.ads(competitor_id, image_phash);
+create index if not exists ads_duplicate_of_idx on public.ads(duplicate_of);
 
 do $$
 begin
@@ -193,6 +209,17 @@ begin
     alter table public.ads
       add constraint ads_stopped_scan_id_fkey
       foreign key (stopped_scan_id) references public.competitor_scan_runs(id) on delete set null;
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'ads_duplicate_of_fkey'
+      and conrelid = 'public.ads'::regclass
+  ) then
+    alter table public.ads
+      add constraint ads_duplicate_of_fkey
+      foreign key (duplicate_of) references public.ads(id) on delete set null;
   end if;
 end $$;
 

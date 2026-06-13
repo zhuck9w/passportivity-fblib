@@ -26,6 +26,8 @@
     "playwright": "^1.57.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "sharp": "^0.35.1",
+    "sharp-phash": "^2.2.0",
     "undici": "^8.4.1",
     "zod": "^4.2.1"
   },

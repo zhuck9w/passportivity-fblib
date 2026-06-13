@@ -16,6 +16,7 @@ import {
   listCompetitors,
   listScrapeRuns,
   setAdHidden,
+  unmarkAdDuplicate,
   updateCompetitor
 } from './repositories';
 
@@ -138,6 +139,14 @@ app.post(
   asyncRoute(async (req, res) => {
     const { ids, hidden } = adBulkHiddenSchema.parse(req.body);
     res.json(await bulkSetAdHidden(ids, hidden));
+  })
+);
+
+// Duplicates view: keep this creative visible and lock it against future auto-dedup.
+app.post(
+  '/api/ads/:id/unmark-duplicate',
+  asyncRoute(async (req, res) => {
+    res.json(await unmarkAdDuplicate(routeParam(req.params.id)));
   })
 );
 

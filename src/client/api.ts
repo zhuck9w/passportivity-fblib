@@ -110,6 +110,12 @@ export function bulkSetAdHidden(ids: string[], hidden: boolean) {
   });
 }
 
+// Duplicates view: restore a creative the dedup wrongly grouped — makes it visible and locks
+// it so the scraper never re-hides it as a duplicate.
+export function unmarkAdDuplicate(id: string) {
+  return api<Ad>(`/api/ads/${id}/unmark-duplicate`, { method: 'POST' });
+}
+
 // URL of the same-origin image proxy (see interface.ts). Used by the Excel export to
 // pull Facebook CDN previews as same-origin bytes (no CORS / no tainted canvas).
 export function imageProxyUrl(url: string) {

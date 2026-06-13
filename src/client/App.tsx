@@ -2,6 +2,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CirclePause,
+  Copy,
   Database,
   Download,
   ExternalLink,
@@ -53,6 +54,7 @@ import {
   setAdHidden,
   startScrape,
   stopScrape,
+  unmarkAdDuplicate,
   updateCompetitor
 } from './api';
 import { type XlsxColumn, type XlsxRow, exportToXlsx } from './excelExport';
@@ -119,6 +121,7 @@ type RowHandlers = {
   onRowResizeStart: (event: ReactMouseEvent, ad: Ad) => void;
   onToggleHidden: (ad: Ad, hidden: boolean) => void;
   onToggleSelect: (ad: Ad, index: number, shiftKey: boolean) => void;
+  onUnmarkDuplicate: (ad: Ad) => void;
   onOpenPreview: (ad: Ad) => void;
   onOpenGeo: (ad: Ad) => void;
   onAspectRatio: (adId: string, aspectRatio: number | null) => void;
@@ -1020,6 +1023,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkHiding, setBulkHiding] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -1399,6 +1403,11 @@ export function App() {
   );
   const visibleAds = useMemo(() => competitorVisibleAds.filter((ad) => !ad.hidden), [competitorVisibleAds]);
   const hiddenCount = competitorVisibleAds.length - visibleAds.length;
+  // Image dedup duplicates (hidden, with a canonical link) — shown only in the dedicated view.
+  const duplicateAds = useMemo(
+    () => competitorVisibleAds.filter((ad) => ad.duplicate_of),
+    [competitorVisibleAds]
+  );
   const revealedAds = revealHidden ? competitorVisibleAds : visibleAds;
   // Client-side "days active" filter (the value is computed in the browser, not on the server):
   // active only when an operator and a finite number are both set. Ads without a computable
@@ -1409,6 +1418,7 @@ export function App() {
     return { op: filters.daysActiveOp, value };
   }, [filters.daysActiveOp, filters.daysActiveValue]);
   const renderedAds = useMemo(() => {
+    if (showDuplicates) return duplicateAds; // dedicated review view — ignore the other filters
     if (!daysActiveFilter) return revealedAds;
     return revealedAds.filter((ad) => {
       const count = daysActiveCount(ad);
@@ -1417,7 +1427,7 @@ export function App() {
       if (daysActiveFilter.op === '<') return count < daysActiveFilter.value;
       return count === daysActiveFilter.value;
     });
-  }, [revealedAds, daysActiveFilter]);
+  }, [showDuplicates, duplicateAds, revealedAds, daysActiveFilter]);
   // "NEW сверху": stable partition — all new ads first (regardless of company), order inside
   // each group stays as fetched. With no new ads this is a no-op.
   const sortedAds = useMemo(() => {
@@ -1619,6 +1629,21 @@ export function App() {
     });
   }
 
+  // Restore a creative the dedup wrongly grouped: it becomes visible + locked, so it drops out
+  // of the duplicates view and never gets auto-hidden again.
+  function handleUnmarkDuplicate(ad: Ad) {
+    const previous = { hidden: ad.hidden, duplicate_of: ad.duplicate_of, dedup_locked: ad.dedup_locked };
+    setAds((current) =>
+      current.map((item) =>
+        item.id === ad.id ? { ...item, hidden: false, duplicate_of: null, dedup_locked: true } : item
+      )
+    );
+    unmarkAdDuplicate(ad.id).catch((requestError) => {
+      setAds((current) => current.map((item) => (item.id === ad.id ? { ...item, ...previous } : item)));
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    });
+  }
+
   function enterSelectionMode() {
     setSelectionMode(true);
     // On mobile the controls live behind the burger — open it so the action bar is visible.
@@ -1728,6 +1753,7 @@ export function App() {
     onRowResizeStart: handleRowResizeStart,
     onToggleHidden: handleToggleAdHidden,
     onToggleSelect: handleToggleSelect,
+    onUnmarkDuplicate: handleUnmarkDuplicate,
     onOpenPreview: (ad) => void openPreview(ad),
     onOpenGeo: (ad) => void openGeo(ad),
     onAspectRatio: rememberPreviewAspectRatio
@@ -1742,6 +1768,7 @@ export function App() {
       onRowResizeStart: (event, ad) => rowHandlersRef.current.onRowResizeStart(event, ad),
       onToggleHidden: (ad, hidden) => rowHandlersRef.current.onToggleHidden(ad, hidden),
       onToggleSelect: (ad, index, shiftKey) => rowHandlersRef.current.onToggleSelect(ad, index, shiftKey),
+      onUnmarkDuplicate: (ad) => rowHandlersRef.current.onUnmarkDuplicate(ad),
       onOpenPreview: (ad) => rowHandlersRef.current.onOpenPreview(ad),
       onOpenGeo: (ad) => rowHandlersRef.current.onOpenGeo(ad),
       onAspectRatio: (adId, ratio) => rowHandlersRef.current.onAspectRatio(adId, ratio)
@@ -1979,6 +2006,15 @@ export function App() {
             <ListChecks size={18} />
             Выделить
           </button>
+          <button
+            type="button"
+            className={`secondary-button view-toggle-button ${showDuplicates ? 'active' : ''}`.trim()}
+            onClick={() => setShowDuplicates((value) => !value)}
+            title="Показать объявления, скрытые как дубли — и при необходимости вернуть в таблицу"
+          >
+            <Copy size={18} />
+            Дубли{duplicateAds.length ? ` (${duplicateAds.length})` : ''}
+          </button>
         </section>
       )}
       </div>
@@ -2065,6 +2101,7 @@ export function App() {
                   rowHeight={virtualRowHeights[virtualRange.start + sliceIndex]}
                   selectionMode={selectionMode}
                   selected={selectedIds.has(ad.id)}
+                  duplicatesView={showDuplicates}
                   pinnedColumnIndex={pinnedColumnIndex}
                   pinnedLeftOffsets={pinnedLeftOffsets}
                   activeResizeColumnKey={activeResizeColumnKey}
@@ -2084,13 +2121,15 @@ export function App() {
           </table>
           {!renderedAds.length && (
             <div className="empty">
-              {ads.length === 0
-                ? 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'
-                : competitorVisibleAds.length === 0
-                  ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
-                  : revealedAds.length === 0
-                    ? 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'
-                    : 'Нет объявлений, подходящих под фильтр по дням активности.'}
+              {showDuplicates
+                ? 'Дублей нет — все собранные креативы уникальны.'
+                : ads.length === 0
+                  ? 'Пока нет сохраненных объявлений. Добавьте конкурента и запустите сбор.'
+                  : competitorVisibleAds.length === 0
+                    ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
+                    : revealedAds.length === 0
+                      ? 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'
+                      : 'Нет объявлений, подходящих под фильтр по дням активности.'}
             </div>
           )}
         </div>
@@ -2119,6 +2158,7 @@ const AdRow = memo(function AdRow({
   rowHeight,
   selectionMode,
   selected,
+  duplicatesView,
   pinnedColumnIndex,
   pinnedLeftOffsets,
   activeResizeColumnKey,
@@ -2133,6 +2173,7 @@ const AdRow = memo(function AdRow({
   rowHeight: number;
   selectionMode: boolean;
   selected: boolean;
+  duplicatesView: boolean;
   pinnedColumnIndex: number;
   pinnedLeftOffsets: Record<string, number>;
   activeResizeColumnKey: string | null;
@@ -2239,6 +2280,15 @@ const AdRow = memo(function AdRow({
               aria-label={selected ? 'Снять выделение объявления' : 'Выделить объявление'}
               onClick={(event) => handlers.onToggleSelect(ad, rowIndex, event.shiftKey)}
             />
+          ) : duplicatesView ? (
+            <button
+              type="button"
+              className="row-hide-button"
+              onClick={() => handlers.onUnmarkDuplicate(ad)}
+              title="Это не дубль — вернуть в таблицу (больше не будет скрываться автоматически)"
+            >
+              <Eye size={16} />
+            </button>
           ) : (
             <button
               type="button"

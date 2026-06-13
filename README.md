@@ -213,6 +213,34 @@ npm.cmd run login:facebook
 
 Важно: не запускайте одновременно `login:facebook` и сбор. Один persistent profile должен использоваться одним процессом браузера.
 
+### Перенос профиля на сервер (VPS) без повторного логина
+
+Профиль `.playwright-profile` (папка из `SCRAPER_USER_DATA_DIR`) — это обычная папка user-data Chromium с cookies и сессией Facebook. Её можно скопировать на сервер, и логиниться на самом VPS не придётся (на headless-сервере без экрана окно логина всё равно не открыть).
+
+**Какую папку перекидывать:** `.playwright-profile` в корне проекта — целиком.
+
+Порядок:
+
+1. **Логин разово локально** — на машине с экраном. Если бэкенд поедет на VPS в РФ (Facebook/OpenAI оттуда недоступны), сначала пропишите в `.env` тот же `PROXY_URL`, что будет на сервере — логин-скрипт ходит через прокси, и Facebook увидит при логине тот же egress-IP, что потом у сервера (подробнее про `PROXY_URL` — в `.env.example` и `src/server/proxy.ts`):
+
+   ```powershell
+   npm.cmd run login:facebook
+   ```
+
+   Войдите в Facebook в открывшемся окне и нажмите Enter — сессия сохранится в `.playwright-profile`.
+
+2. **Скопируйте папку на сервер** (предварительно закрыв браузер/скрейпер, чтобы папка не была занята):
+
+   ```bash
+   scp -r .playwright-profile user@vps:/path/to/app/.playwright-profile
+   ```
+
+3. **На сервере** в `.env`: тот же `PROXY_URL`, `SCRAPER_USER_DATA_DIR=.playwright-profile`, `SCRAPER_HEADLESS=true`. Скрейпер переиспользует сессию — логин на VPS не нужен.
+
+Держите одинаковый браузер на обеих машинах (`SCRAPER_BROWSER_CHANNEL`): либо системный Chrome там и там, либо на обеих — bundled Chromium (уберите `SCRAPER_BROWSER_CHANNEL` и выполните `npx playwright install chromium`). Если на VPS словите «profile is already in use» — удалите в папке профиля файлы `SingletonLock` / `SingletonCookie` / `SingletonSocket`.
+
+**Проверка живости сессии:** при открытии каждого конкурента скрейпер пишет в `logs/scraper.log` строку `Facebook login active` (с `fb_account_id`) либо `Facebook login MISSING`. Если увидели `MISSING` — сессия протухла: перелогиньтесь локально (п.1) и заново скопируйте папку (п.2).
+
 ## Логи
 
 При запуске через фоновые команды в корне проекта остаются:

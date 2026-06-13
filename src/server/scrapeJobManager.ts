@@ -1,4 +1,4 @@
-import type { Competitor, ScrapeJobSnapshot } from '../shared/types';
+import type { Ad, Competitor, ScrapeJobSnapshot, ScrapedAdInput } from '../shared/types';
 import {
   assessAdCreative,
   imageUrlsFromMediaItems,
@@ -12,16 +12,39 @@ import {
   createScrapeRun,
   finishCompetitorScan,
   getCompetitor,
+  listCompetitorCanonicalImages,
   listEnabledCompetitors,
+  markAdAsDuplicate,
   markCompetitorScraped,
   recordAdScanObservation,
+  repointDuplicates,
+  setAdImageFingerprint,
   updateAdAssessment,
   updateScrapeRun,
   upsertScrapedAd
 } from './repositories';
 import { env } from './env';
+import { adRunDays, computeImageFingerprint, downloadImageBuffer, isImageDuplicate, primaryImageUrl } from './imageDedup';
 import { logScraper } from './logger';
 import { FacebookAdLibraryScraper } from './scraper/facebookAdLibraryScraper';
+
+// In-memory canonical fingerprint tracked during a competitor's scan (mirrors DB canonicals).
+type DedupCanonical = { id: string; phash: string; aspect: number; runDays: number; locked: boolean };
+
+function upsertCanonical(list: DedupCanonical[], entry: DedupCanonical) {
+  const index = list.findIndex((item) => item.id === entry.id);
+  if (index >= 0) list[index] = entry;
+  else list.push(entry);
+}
+
+// Promotion: the old canonical is demoted to a duplicate, so drop it from the live set and
+// put the new (longer-running) canonical in its place.
+function replaceCanonical(list: DedupCanonical[], oldId: string, entry: DedupCanonical) {
+  const filtered = list.filter((item) => item.id !== oldId && item.id !== entry.id);
+  filtered.push(entry);
+  list.length = 0;
+  list.push(...filtered);
+}
 
 export class ScrapeJobManager {
   private readonly jobs = new Map<string, ScrapeJobSnapshot>();
@@ -118,6 +141,7 @@ export class ScrapeJobManager {
 
     let adsFound = 0;
     let adsSaved = 0;
+    let dupsHidden = 0;
     let limitReached = false;
     let aiQueued = 0;
     let aiChain: Promise<void> = Promise.resolve();
@@ -136,6 +160,7 @@ export class ScrapeJobManager {
         page_id: competitor.facebook_page_id
       });
       try {
+        const canonicals = await this.loadCompetitorCanonicals(competitor.id);
         const result = await this.scraper.scrapeCompetitor(competitor, {
           limit: Math.max(1, limit - adsSaved),
           collectCarousels,
@@ -159,13 +184,18 @@ export class ScrapeJobManager {
                 library_id: ad.facebook_library_id,
                 existing: saved.isExisting
               });
-              const aiEligible = isAiAssessmentEnabled() && (env.aiAssessmentForce || !saved.ad.ai_assessed_at);
+              const duplicateOf = await this.resolveImageDuplicate(saved.ad, ad, canonicals, runId, competitor.name);
+              if (duplicateOf) dupsHidden += 1;
+              // Duplicates are hidden and skip AI entirely — only the kept (canonical) creative is assessed.
+              const aiEligible =
+                !duplicateOf && isAiAssessmentEnabled() && (env.aiAssessmentForce || !saved.ad.ai_assessed_at);
               logScraper('info', 'AI assessment decision', {
                 run_id: runId,
                 library_id: ad.facebook_library_id,
                 enabled: isAiAssessmentEnabled(),
                 force: env.aiAssessmentForce,
                 already_assessed: Boolean(saved.ad.ai_assessed_at),
+                is_duplicate: Boolean(duplicateOf),
                 queued: aiEligible
               });
               if (aiEligible) {
@@ -181,7 +211,7 @@ export class ScrapeJobManager {
                 aiQueued += 1;
                 aiChain = aiChain.then(() => this.assessSavedAd(runId, adId, libraryId, mediaItems, context));
               }
-              this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: 0 });
+              this.patch(runId, { ads_found: adsFound, ads_saved: adsSaved, duplicates_found: dupsHidden });
               if (adsSaved >= limit) {
                 limitReached = true;
                 logScraper('info', 'Scrape limit reached', {
@@ -265,7 +295,7 @@ export class ScrapeJobManager {
       finished_at: finishedAt,
       ads_found: adsFound,
       ads_saved: adsSaved,
-      duplicates_found: 0,
+      duplicates_found: dupsHidden,
       error_summary: errorSummary
     }).catch(() => undefined);
 
@@ -285,7 +315,7 @@ export class ScrapeJobManager {
       limit,
       limit_reached: limitReached,
       collect_carousels: collectCarousels,
-      duplicates_found: 0,
+      duplicates_found: dupsHidden,
       errors
     });
     logScraper(status === 'succeeded' ? 'info' : status === 'stopped' ? 'warn' : 'error', 'Scrape run finished', {
@@ -297,6 +327,89 @@ export class ScrapeJobManager {
       errors: errors.length
     });
     this.controllers.delete(runId);
+  }
+
+  private async loadCompetitorCanonicals(competitorId: string): Promise<DedupCanonical[]> {
+    try {
+      const rows = await listCompetitorCanonicalImages(competitorId);
+      return rows
+        .filter((row) => row.image_phash && row.image_aspect)
+        .map((row) => ({
+          id: row.id,
+          phash: row.image_phash as string,
+          aspect: row.image_aspect as number,
+          runDays: adRunDays(row),
+          locked: row.dedup_locked
+        }));
+    } catch (error) {
+      logScraper('warn', 'Image dedup: failed to load canonicals', {
+        competitor_id: competitorId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return [];
+    }
+  }
+
+  // Returns the canonical ad id when `savedAd` is a duplicate (already hidden + linked in DB),
+  // or null when it's the canonical/unique creative (so AI may run). Mutates `canonicals` so the
+  // rest of the competitor's scan dedups against the up-to-date set. Best-effort: any failure
+  // downloading/hashing falls back to "not a duplicate" so the scrape never breaks on dedup.
+  private async resolveImageDuplicate(
+    savedAd: Ad,
+    scraped: ScrapedAdInput,
+    canonicals: DedupCanonical[],
+    runId: string,
+    competitorName: string
+  ): Promise<string | null> {
+    const imageUrl = primaryImageUrl(scraped.media_items);
+    if (!imageUrl) return null; // videos / no image — not deduped
+
+    const buffer = await downloadImageBuffer(imageUrl);
+    if (!buffer) return null;
+    const fingerprint = await computeImageFingerprint(buffer);
+    if (!fingerprint) return null;
+
+    await setAdImageFingerprint(savedAd.id, fingerprint.phash, fingerprint.aspect).catch(() => undefined);
+
+    const self: DedupCanonical = {
+      id: savedAd.id,
+      phash: fingerprint.phash,
+      aspect: fingerprint.aspect,
+      runDays: adRunDays(savedAd),
+      locked: savedAd.dedup_locked
+    };
+
+    const match = canonicals.find((candidate) => candidate.id !== savedAd.id && isImageDuplicate(fingerprint, candidate));
+
+    // No match, or this ad is user-locked as visible → it's (stays) a canonical, never hidden.
+    if (!match || savedAd.dedup_locked) {
+      upsertCanonical(canonicals, self);
+      return null;
+    }
+
+    // Longer-running than a non-locked canonical → promote this, demote the old one.
+    if (!match.locked && self.runDays > match.runDays) {
+      await markAdAsDuplicate(match.id, savedAd.id);
+      await repointDuplicates(match.id, savedAd.id);
+      replaceCanonical(canonicals, match.id, self);
+      logScraper('info', 'Image dedup: kept longer-running creative', {
+        run_id: runId,
+        competitor: competitorName,
+        kept: savedAd.facebook_library_id,
+        hidden_ad_id: match.id
+      });
+      return null;
+    }
+
+    // Otherwise this is the duplicate: hide it and skip AI.
+    await markAdAsDuplicate(savedAd.id, match.id);
+    logScraper('info', 'Image dedup: hidden as duplicate', {
+      run_id: runId,
+      competitor: competitorName,
+      library_id: savedAd.facebook_library_id,
+      duplicate_of: match.id
+    });
+    return match.id;
   }
 
   private async assessSavedAd(

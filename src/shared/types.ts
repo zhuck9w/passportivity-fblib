@@ -122,6 +122,10 @@ export type Ad = {
   dedupe_key: string;
   duplicate_count: number;
   hidden: boolean;
+  image_phash: string | null;
+  image_aspect: number | null;
+  duplicate_of: string | null;
+  dedup_locked: boolean;
   ai_main_object: string | null;
   ai_main_color: string | null;
   ai_jtbd: string | null;
