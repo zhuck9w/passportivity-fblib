@@ -1712,3 +1712,24 @@ select,
     grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   }
 }
+
+.show-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 12px 28px;
+}
+
+.show-more-btn {
+  padding: 10px 22px;
+  border: 1px solid #cdd6db;
+  border-radius: 8px;
+  background: #fff;
+  color: #172026;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.show-more-btn:hover {
+  background: #eef2f4;
+}

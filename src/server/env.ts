@@ -64,6 +64,14 @@ export const env = {
   aiAssessmentForce: readBoolean('AI_ASSESSMENT_FORCE', false),
   scraperMaxAds: defaultScraperLimit,
   scraperMaxScrolls: readNumber('SCRAPER_MAX_SCROLLS', 12),
+  // How many consecutive "no new cards" scroll rounds counts as "reached the end" of a
+  // competitor's results, and the pause (ms) between scroll steps. Raise the pause if a slow
+  // proxy makes Facebook load cards slower than this, which would otherwise stop collection early.
+  scraperScrollStableRounds: readNumber('SCRAPER_SCROLL_STABLE_ROUNDS', 2),
+  scraperScrollPauseMs: readNumber('SCRAPER_SCROLL_PAUSE_MS', 1200),
+  // Max ads the interface API returns to the dashboard per query. Supabase also caps this at
+  // the project's "Max rows" setting (default 1000).
+  adsFetchLimit: readNumber('ADS_FETCH_LIMIT', 1000),
   scraperNavigationTimeoutMs: readNumber('SCRAPER_NAVIGATION_TIMEOUT_MS', 45000),
   scraperActionTimeoutMs: readNumber('SCRAPER_ACTION_TIMEOUT_MS', 12000)
 };

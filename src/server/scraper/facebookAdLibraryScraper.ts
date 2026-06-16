@@ -218,11 +218,11 @@ export class FacebookAdLibraryScraper {
       if (count >= limit) return;
       if (count === previousCount) stableRounds += 1;
       else stableRounds = 0;
-      if (stableRounds >= 2) return;
+      if (stableRounds >= env.scraperScrollStableRounds) return;
 
       previousCount = count;
       await page.mouse.wheel(0, 2200);
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(env.scraperScrollPauseMs);
     }
   }
 
@@ -404,7 +404,7 @@ export class FacebookAdLibraryScraper {
 
       if (count === previousCount) stableRounds += 1;
       else stableRounds = 0;
-      if (stableRounds >= 2) return null;
+      if (stableRounds >= env.scraperScrollStableRounds) return null;
 
       previousCount = count;
       await page.mouse.wheel(0, 1800);

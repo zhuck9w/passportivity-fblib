@@ -9,6 +9,7 @@ import type {
   ScrapeRun
 } from '../shared/types';
 import { reconcileScanLibraryIds, type ScanReconciliationResult } from './adStatusReconciliation';
+import { env } from './env';
 import { supabase } from './supabase';
 
 function throwIfError<T>(result: { data: T | null; error: { message: string } | null }) {
@@ -298,7 +299,7 @@ export async function listAds(filters: {
     .from('ads')
     .select('*, competitors(id, name, facebook_page_id)')
     .order('last_seen_at', { ascending: false })
-    .limit(250);
+    .limit(env.adsFetchLimit);
 
   if (filters.competitorIds?.length) query = query.in('competitor_id', filters.competitorIds);
   if (filters.status === 'active') query = query.in('status', ['active', 'new']);

@@ -127,6 +127,10 @@ type RowHandlers = {
   onAspectRatio: (adId: string, aspectRatio: number | null) => void;
 };
 
+// Rows shown initially and added per "Показать ещё" click. Override at build time with
+// VITE_ADS_PAGE_SIZE (e.g. a Cloudflare build variable); falls back to 250.
+const adsPageSize = Math.max(1, Number(import.meta.env.VITE_ADS_PAGE_SIZE) || 250);
+
 const sortModeStorageKey = 'ad-library-sort-mode';
 
 function loadSortMode(): SortMode {
@@ -995,6 +999,8 @@ export function App() {
   const [geoAd, setGeoAd] = useState<Ad | null>(null);
   const [filters, setFilters] = useState<Filters>(() => loadFilters());
   const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
+  // Client-side pagination: how many of the fetched/sorted rows are currently rendered.
+  const [visibleCount, setVisibleCount] = useState(adsPageSize);
   const [competitorsOpen, setCompetitorsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [collectCarousels, setCollectCarousels] = useState(true);
@@ -1437,6 +1443,16 @@ export function App() {
     return [...fresh, ...renderedAds.filter((ad) => ad.status !== 'new')];
   }, [renderedAds, sortMode]);
 
+  // Client-side pagination: render only the first `visibleCount` rows; "Показать ещё" grows it.
+  // pagedAds is always a prefix of sortedAds, so row indices stay aligned with selection/export
+  // (which keep operating on the full sortedAds set, not just the visible page).
+  const pagedAds = useMemo(() => sortedAds.slice(0, visibleCount), [sortedAds, visibleCount]);
+  // Snap back to the first page whenever the filter or sort changes.
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+  useEffect(() => {
+    setVisibleCount(adsPageSize);
+  }, [filtersKey, sortMode]);
+
   // Mirror the current ordered list for the stable row handlers (shift-range, select-all).
   sortedAdsRef.current = sortedAds;
   const selectedCount = useMemo(
@@ -1449,8 +1465,8 @@ export function App() {
   // Row virtualization: only rows near the viewport are mounted; the rest is replaced by
   // two spacer rows so scroll geometry stays intact. Row heights are known up front.
   const virtualRowHeights = useMemo(
-    () => sortedAds.map((ad) => tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id])),
-    [sortedAds, tableLayout.rowHeights, previewAspectRatios]
+    () => pagedAds.map((ad) => tableLayout.rowHeights[ad.id] ?? defaultRowHeightForAd(ad, previewAspectRatios[ad.id])),
+    [pagedAds, tableLayout.rowHeights, previewAspectRatios]
   );
   const virtualRowOffsets = useMemo(() => {
     const offsets = new Array<number>(virtualRowHeights.length + 1);
@@ -2093,7 +2109,7 @@ export function App() {
                   <td colSpan={tableColumns.length + 1} style={{ height: virtualRange.topPad }} />
                 </tr>
               )}
-              {sortedAds.slice(virtualRange.start, virtualRange.end).map((ad, sliceIndex) => (
+              {pagedAds.slice(virtualRange.start, virtualRange.end).map((ad, sliceIndex) => (
                 <AdRow
                   key={ad.id}
                   ad={ad}
@@ -2119,6 +2135,18 @@ export function App() {
               )}
             </tbody>
           </table>
+          {sortedAds.length > visibleCount && (
+            <div className="show-more">
+              <button
+                type="button"
+                className="show-more-btn"
+                onClick={() => setVisibleCount((current) => current + adsPageSize)}
+              >
+                Показать ещё {Math.min(adsPageSize, sortedAds.length - visibleCount)} (показано{' '}
+                {visibleCount} из {sortedAds.length})
+              </button>
+            </div>
+          )}
           {!renderedAds.length && (
             <div className="empty">
               {showDuplicates
