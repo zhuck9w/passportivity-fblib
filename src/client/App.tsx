@@ -1832,9 +1832,13 @@ export function App() {
             />
             <span>Карусели</span>
           </label>
-          <button className="primary-button" onClick={() => void handleStartScrape()}>
+          <button
+            className="primary-button"
+            onClick={() => void handleStartScrape()}
+            disabled={job?.status === 'running'}
+          >
             <Play size={18} />
-            Собрать включенных
+            {job?.status === 'running' ? 'Идёт сбор…' : 'Собрать включенных'}
           </button>
           <button
             type="button"
@@ -2171,6 +2175,7 @@ export function App() {
           onClose={() => setCompetitorsOpen(false)}
           onChanged={() => void refresh()}
           onScrape={(id) => void handleStartScrape(id)}
+          scrapeRunning={job?.status === 'running'}
         />
       )}
 
@@ -2596,12 +2601,14 @@ function CompetitorsDialog({
   competitors,
   onClose,
   onChanged,
-  onScrape
+  onScrape,
+  scrapeRunning
 }: {
   competitors: Competitor[];
   onClose: () => void;
   onChanged: () => void;
   onScrape: (id: string) => void;
+  scrapeRunning: boolean;
 }) {
   const [name, setName] = useState('');
   const [pageId, setPageId] = useState('');
@@ -2788,7 +2795,12 @@ function CompetitorsDialog({
               >
                 {competitor.visible === false ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
-              <button className="icon-button" onClick={() => onScrape(competitor.id)} title="Собрать этого конкурента">
+              <button
+                className="icon-button"
+                onClick={() => onScrape(competitor.id)}
+                title={scrapeRunning ? 'Сбор уже идёт' : 'Собрать этого конкурента'}
+                disabled={scrapeRunning}
+              >
                 <Play size={17} />
               </button>
               <button

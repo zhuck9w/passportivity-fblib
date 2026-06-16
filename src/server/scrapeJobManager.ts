@@ -52,6 +52,16 @@ export class ScrapeJobManager {
   private readonly scraper = new FacebookAdLibraryScraper();
 
   async start(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
+    // One run at a time: the scraper shares a single persistent browser profile, so a second
+    // concurrent run would collide on the profile lock. Re-attach to the in-progress run instead
+    // of starting another. Guards the API for direct callers / multiple devices, not just the UI.
+    const activeJob = this.list().find((job) => job.status === 'running');
+    if (activeJob) {
+      logScraper('warn', 'Scrape start ignored — a run is already in progress', {
+        active_run_id: activeJob.run_id
+      });
+      return activeJob;
+    }
     const competitors = await this.resolveCompetitors(input.competitorId);
     const runLimit = Math.max(1, input.limit ?? env.scraperLimit);
     const collectCarousels = input.collectCarousels ?? env.scraperCollectCarousels;
