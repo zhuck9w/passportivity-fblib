@@ -14,7 +14,9 @@
     "test": "vitest run",
     "login:facebook": "tsx src/server/scripts/loginFacebookProfile.ts",
     "restore:split-ads": "tsx src/server/scripts/restoreSplitAds.ts",
-    "scrape": "tsx src/server/scripts/runScrape.ts"
+    "scrape": "tsx src/server/scripts/runScrape.ts",
+    "start:interface": "tsx src/server/interface.ts",
+    "start:scraper": "tsx src/server/scraperService.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.84.0",
