@@ -1,0 +1,13 @@
+{
+  // Cloudflare Workers static-assets config for the React/Vite frontend.
+  // The build (`npm run build`) outputs to ./dist; this Worker just serves it from Cloudflare's CDN.
+  // Backend (interface API + scraper) lives on the VPS — the frontend talks to it via
+  // VITE_API_URL / VITE_SCRAPER_URL set as build env vars in the Cloudflare dashboard.
+  "name": "passportivity-fblib",
+  "compatibility_date": "2026-06-16",
+  "assets": {
+    "directory": "./dist",
+    // Serve index.html for any unknown path (safe default for a single-page app).
+    "not_found_handling": "single-page-application"
+  }
+}
