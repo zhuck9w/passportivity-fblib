@@ -507,6 +507,134 @@ select,
   cursor: not-allowed;
 }
 
+/* Consolidated "Фильтры" menu */
+.filters-trigger {
+  min-width: 150px;
+}
+
+.filters-trigger-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.filters-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #1769e0;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.filters-panel {
+  left: auto;
+  right: 0;
+  width: min(320px, calc(100vw - 48px));
+  max-height: min(72vh, 660px);
+  overflow: auto;
+  display: block;
+}
+
+/* Each filter is its own white block; blocks are separated by a thick light band so the
+   boundary between «Конкуренты» and «Страна» reads as a real group break — not as just one
+   more thin line like the inner search/actions dividers. */
+.filters-section {
+  padding-bottom: 8px;
+}
+
+.filters-section + .filters-section,
+.filters-panel-footer {
+  border-top: 8px solid #eef2f5;
+}
+
+.filters-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 12px 7px;
+}
+
+/* Keep the inner dividers (under the search field / actions) faint so they don't compete
+   with the group-separating band. */
+.filters-panel .multi-select-search {
+  border-bottom-color: #f1f5f7;
+}
+
+.filters-panel .multi-select-actions {
+  border-bottom: 0;
+  padding-bottom: 2px;
+}
+
+.filters-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #586670;
+}
+
+.filters-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e7eef9;
+  color: #1255b5;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.filters-panel .multi-select-list {
+  max-height: 184px;
+}
+
+.filters-panel .days-active-filter {
+  display: flex;
+  width: calc(100% - 24px);
+  margin: 2px 12px 4px;
+}
+
+.filters-panel .days-active-filter .days-active-op {
+  flex: 1;
+  min-width: 0;
+}
+
+.filters-panel-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 12px;
+}
+
+.filters-panel-footer button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  color: #1769e0;
+}
+
+.filters-panel-footer button:hover {
+  text-decoration: underline;
+}
+
+.filters-panel-footer button:disabled {
+  color: #93a3ad;
+  cursor: default;
+  text-decoration: none;
+}
+
 .sort-toggle {
   display: inline-flex;
   height: 38px;

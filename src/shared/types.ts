@@ -89,6 +89,7 @@ export type AdVariation = {
 };
 
 export const adAiAssessmentKeys = [
+  'ai_geo',
   'ai_main_object',
   'ai_main_color',
   'ai_jtbd',
@@ -126,6 +127,7 @@ export type Ad = {
   image_aspect: number | null;
   duplicate_of: string | null;
   dedup_locked: boolean;
+  ai_geo: string | null;
   ai_main_object: string | null;
   ai_main_color: string | null;
   ai_jtbd: string | null;

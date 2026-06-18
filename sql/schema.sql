@@ -48,6 +48,7 @@ create table if not exists public.ads (
   image_aspect double precision,
   duplicate_of uuid,
   dedup_locked boolean not null default false,
+  ai_geo text,
   ai_main_object text,
   ai_main_color text,
   ai_jtbd text,
@@ -148,6 +149,7 @@ alter table public.scrape_runs add constraint scrape_runs_status_check
 
 alter table public.competitors add column if not exists visible boolean not null default true;
 alter table public.ads add column if not exists hidden boolean not null default false;
+alter table public.ads add column if not exists ai_geo text;
 alter table public.ads add column if not exists ai_main_object text;
 alter table public.ads add column if not exists ai_main_color text;
 alter table public.ads add column if not exists ai_jtbd text;

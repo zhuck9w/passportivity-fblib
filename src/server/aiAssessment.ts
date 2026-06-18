@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeGeo } from '../shared/countries';
 import { adAiAssessmentKeys, type AdAiAssessment, type AdMediaItem } from '../shared/types';
 import { env } from './env';
 import { proxiedFetch } from './proxy';
@@ -205,7 +206,12 @@ export async function assessAdCreative(input: { imageUrls: string[]; context: Ad
       if (!content) throw new Error('OpenAI returned empty content');
       const parsed = JSON.parse(content) as Record<string, unknown>;
       return Object.fromEntries(
-        adAiAssessmentKeys.map((key) => [key, clampField(parsed[key])])
+        adAiAssessmentKeys.map((key) => {
+          // ai_geo is snapped to a canonical Russian country name so the column / filter never
+          // collect a mess of spellings; every other field is free 250–300 char text.
+          const value = key === 'ai_geo' ? normalizeGeo(String(parsed[key] ?? '')) : clampField(parsed[key]);
+          return [key, value];
+        })
       ) as AdAiAssessment;
     } catch (error) {
       lastError = error;

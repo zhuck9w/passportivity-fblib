@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   Square,
   Trash2,
   X
@@ -37,6 +38,7 @@ import {
   useRef,
   useState
 } from 'react';
+import { nonCountryGeoValues, splitGeoValues } from '../shared/countries';
 import { adAiAssessmentKeys } from '../shared/types';
 import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
 import {
@@ -63,6 +65,7 @@ type DaysActiveOp = '>' | '<' | '=';
 
 type Filters = {
   competitorIds: string[];
+  geos: string[];
   status: string;
   q: string;
   daysActiveOp: DaysActiveOp | '';
@@ -72,7 +75,7 @@ type Filters = {
 const filtersStorageKey = 'ad-library-filters-v1';
 
 function loadFilters(): Filters {
-  const fallback: Filters = { competitorIds: [], status: '', q: '', daysActiveOp: '', daysActiveValue: '' };
+  const fallback: Filters = { competitorIds: [], geos: [], status: '', q: '', daysActiveOp: '', daysActiveValue: '' };
   if (typeof window === 'undefined') return fallback;
 
   try {
@@ -85,6 +88,7 @@ function loadFilters(): Filters {
         : parsed.competitorId
           ? [parsed.competitorId]
           : [],
+      geos: Array.isArray(parsed.geos) ? parsed.geos.filter((geo): geo is string => typeof geo === 'string') : [],
       status: typeof parsed.status === 'string' ? parsed.status : '',
       q: typeof parsed.q === 'string' ? parsed.q : '',
       daysActiveOp:
@@ -168,7 +172,13 @@ const tableColumns: TableColumn[] = [
   { key: 'body_text', label: 'body_text', width: 470, minWidth: 220, maxWidth: 900 },
   { key: 'geo', label: 'geo', width: 170, minWidth: 120, maxWidth: 360 },
   { key: 'last_seen_at', label: 'last_seen_at', width: 150, minWidth: 120, maxWidth: 260 },
-  ...adAiAssessmentKeys.map((key) => ({ key, label: key, width: 230, minWidth: 150, maxWidth: 600 }))
+  ...adAiAssessmentKeys.map((key) => ({
+    key,
+    label: key,
+    width: key === 'ai_geo' ? 150 : 230,
+    minWidth: key === 'ai_geo' ? 110 : 150,
+    maxWidth: 600
+  }))
 ];
 
 const tableColumnByKey = Object.fromEntries(tableColumns.map((column) => [column.key, column])) as Record<
@@ -1415,6 +1425,20 @@ export function App() {
     [competitorVisibleAds]
   );
   const revealedAds = revealHidden ? competitorVisibleAds : visibleAds;
+  // Distinct ai_geo countries actually present in the data — the country filter's options.
+  // Sentinels («Не определено», «Видео») and ads without an assessment are skipped.
+  const geoOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const ad of competitorVisibleAds) {
+      for (const token of splitGeoValues(ad.ai_geo)) {
+        if (!nonCountryGeoValues.has(token)) set.add(token);
+      }
+    }
+    return Array.from(set).sort((left, right) => left.localeCompare(right, 'ru'));
+  }, [competitorVisibleAds]);
+  // Client-side "country" filter: keep an ad if any of its ai_geo countries is selected.
+  const geosKey = filters.geos.join('|');
+  const geoFilter = useMemo(() => (filters.geos.length ? new Set(filters.geos) : null), [geosKey]);
   // Client-side "days active" filter (the value is computed in the browser, not on the server):
   // active only when an operator and a finite number are both set. Ads without a computable
   // days_active value (stopped / no start date) can't satisfy a numeric comparison, so they drop.
@@ -1425,15 +1449,19 @@ export function App() {
   }, [filters.daysActiveOp, filters.daysActiveValue]);
   const renderedAds = useMemo(() => {
     if (showDuplicates) return duplicateAds; // dedicated review view — ignore the other filters
-    if (!daysActiveFilter) return revealedAds;
+    if (!geoFilter && !daysActiveFilter) return revealedAds;
     return revealedAds.filter((ad) => {
-      const count = daysActiveCount(ad);
-      if (count === null) return false;
-      if (daysActiveFilter.op === '>') return count > daysActiveFilter.value;
-      if (daysActiveFilter.op === '<') return count < daysActiveFilter.value;
-      return count === daysActiveFilter.value;
+      if (geoFilter && !splitGeoValues(ad.ai_geo).some((token) => geoFilter.has(token))) return false;
+      if (daysActiveFilter) {
+        const count = daysActiveCount(ad);
+        if (count === null) return false;
+        if (daysActiveFilter.op === '>') return count > daysActiveFilter.value;
+        if (daysActiveFilter.op === '<') return count < daysActiveFilter.value;
+        return count === daysActiveFilter.value;
+      }
+      return true;
     });
-  }, [showDuplicates, duplicateAds, revealedAds, daysActiveFilter]);
+  }, [showDuplicates, duplicateAds, revealedAds, geoFilter, daysActiveFilter]);
   // "NEW сверху": stable partition — all new ads first (regardless of company), order inside
   // each group stays as fetched. With no new ads this is a no-op.
   const sortedAds = useMemo(() => {
@@ -1954,11 +1982,6 @@ export function App() {
               placeholder="Поиск по body_text"
             />
           </label>
-          <CompetitorMultiSelect
-            competitors={competitors}
-            selectedIds={filters.competitorIds}
-            onChange={(competitorIds) => setFilters((current) => ({ ...current, competitorIds }))}
-          />
           <select
             value={filters.status}
             title="Фильтр по статусу"
@@ -1972,33 +1995,12 @@ export function App() {
             <option value="inactive">Inactive</option>
             <option value="unknown">Неизвестно</option>
           </select>
-          <div className="days-active-filter" role="group" aria-label="Фильтр по дням активности">
-            <select
-              className="days-active-op"
-              value={filters.daysActiveOp}
-              title="Фильтр по дням активности (days active)"
-              aria-label="Условие фильтра по дням активности"
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, daysActiveOp: event.target.value as DaysActiveOp | '' }))
-              }
-            >
-              <option value="">Days active</option>
-              <option value=">">Больше (&gt;)</option>
-              <option value="<">Меньше (&lt;)</option>
-              <option value="=">Равно (=)</option>
-            </select>
-            <input
-              type="number"
-              min="0"
-              inputMode="numeric"
-              className="days-active-value"
-              value={filters.daysActiveValue}
-              disabled={!filters.daysActiveOp}
-              placeholder="дней"
-              aria-label="Количество дней активности"
-              onChange={(event) => setFilters((current) => ({ ...current, daysActiveValue: event.target.value }))}
-            />
-          </div>
+          <FiltersMenu
+            competitors={competitors}
+            geoOptions={geoOptions}
+            filters={filters}
+            onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
+          />
           <div className="sort-toggle" role="group" aria-label="Порядок строк">
             <button
               type="button"
@@ -2161,7 +2163,7 @@ export function App() {
                     ? 'Все объявления скрыты. Включите видимость конкурента (иконка «глаз») в разделе «Конкуренты».'
                     : revealedAds.length === 0
                       ? 'Все объявления скрыты вручную. Нажмите «глаз» в шапке таблицы, чтобы показать их.'
-                      : 'Нет объявлений, подходящих под фильтр по дням активности.'}
+                      : 'Нет объявлений, подходящих под выбранные фильтры.'}
             </div>
           )}
         </div>
@@ -2453,17 +2455,92 @@ function SelectAllCheckbox({
   );
 }
 
-function CompetitorMultiSelect({
-  competitors,
+type FilterOption = { id: string; name: string; searchText?: string };
+
+// Inline search + "Выбрать все/Сбросить" + scrollable checkbox list. Reused inside the
+// consolidated Фильтры popover for both competitors and countries.
+function CheckListFilter({
+  title,
+  options,
   selectedIds,
+  onChange,
+  searchPlaceholder,
+  emptyText
+}: {
+  title: string;
+  options: FilterOption[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  searchPlaceholder: string;
+  emptyText: string;
+}) {
+  const [search, setSearch] = useState('');
+  const normalizedSearch = search.trim().toLowerCase();
+  const matches = normalizedSearch
+    ? options.filter((option) => (option.searchText ?? option.name).toLowerCase().includes(normalizedSearch))
+    : options;
+  const selected = new Set(selectedIds);
+
+  function toggle(id: string) {
+    onChange(selected.has(id) ? selectedIds.filter((value) => value !== id) : [...selectedIds, id]);
+  }
+
+  function selectAllVisible() {
+    const ids = new Set(selectedIds);
+    for (const option of matches) ids.add(option.id);
+    onChange(Array.from(ids));
+  }
+
+  return (
+    <div className="filters-section">
+      <div className="filters-section-head">
+        <span className="filters-section-title">{title}</span>
+        {selectedIds.length > 0 && <span className="filters-section-count">{selectedIds.length}</span>}
+      </div>
+      <label className="multi-select-search">
+        <Search size={14} />
+        <input
+          value={search}
+          aria-label={searchPlaceholder}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={searchPlaceholder}
+        />
+      </label>
+      <div className="multi-select-actions">
+        <button type="button" onClick={selectAllVisible} disabled={!matches.length}>
+          Выбрать все
+        </button>
+        <button type="button" onClick={() => onChange([])} disabled={!selectedIds.length}>
+          Сбросить
+        </button>
+      </div>
+      <div className="multi-select-list" role="group" aria-label={title}>
+        {matches.map((option) => (
+          <label key={option.id} className="multi-select-option">
+            <input type="checkbox" checked={selected.has(option.id)} onChange={() => toggle(option.id)} />
+            <span className="multi-select-option-name">{option.name}</span>
+          </label>
+        ))}
+        {!matches.length && <div className="multi-select-empty">{emptyText}</div>}
+      </div>
+    </div>
+  );
+}
+
+// Consolidated filters behind a single button: competitors + country + days-active. Status stays
+// outside this menu (it's the most-used filter). The badge shows how many groups are active.
+function FiltersMenu({
+  competitors,
+  geoOptions,
+  filters,
   onChange
 }: {
   competitors: Competitor[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
+  geoOptions: string[];
+  filters: Filters;
+  onChange: (patch: Partial<Filters>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -2484,80 +2561,96 @@ function CompetitorMultiSelect({
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) setSearch('');
-  }, [open]);
+  const competitorOptions = useMemo<FilterOption[]>(
+    () =>
+      competitors.map((competitor) => ({
+        id: competitor.id,
+        name: competitor.name,
+        searchText: `${competitor.name} ${competitor.facebook_page_id}`
+      })),
+    [competitors]
+  );
+  const geoFilterOptions = useMemo<FilterOption[]>(
+    () => geoOptions.map((name) => ({ id: name, name })),
+    [geoOptions]
+  );
 
-  const normalizedSearch = search.trim().toLowerCase();
-  const matches = normalizedSearch
-    ? competitors.filter(
-        (competitor) =>
-          competitor.name.toLowerCase().includes(normalizedSearch) ||
-          competitor.facebook_page_id.includes(normalizedSearch)
-      )
-    : competitors;
-  const selected = new Set(selectedIds);
-  const label = !selectedIds.length
-    ? 'Все конкуренты'
-    : selectedIds.length === 1
-      ? (competitors.find((competitor) => competitor.id === selectedIds[0])?.name ?? 'Конкуренты: 1')
-      : `Конкуренты: ${selectedIds.length}`;
+  const daysActiveActive = Boolean(filters.daysActiveOp) && filters.daysActiveValue.trim() !== '';
+  const activeCount =
+    (filters.competitorIds.length ? 1 : 0) + (filters.geos.length ? 1 : 0) + (daysActiveActive ? 1 : 0);
 
-  function toggleCompetitor(id: string) {
-    onChange(selected.has(id) ? selectedIds.filter((value) => value !== id) : [...selectedIds, id]);
-  }
-
-  function selectAllVisible() {
-    const ids = new Set(selectedIds);
-    for (const competitor of matches) ids.add(competitor.id);
-    onChange(Array.from(ids));
+  function resetAll() {
+    onChange({ competitorIds: [], geos: [], daysActiveOp: '', daysActiveValue: '' });
   }
 
   return (
-    <div className="multi-select" ref={rootRef}>
+    <div className="multi-select filters-menu" ref={rootRef}>
       <button
         type="button"
-        className={`multi-select-trigger ${selectedIds.length ? 'has-value' : ''}`.trim()}
+        className={`multi-select-trigger filters-trigger ${activeCount ? 'has-value' : ''}`.trim()}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open ? 'true' : 'false'}
         aria-haspopup="dialog"
-        title="Фильтр по конкурентам"
+        title="Фильтры: конкуренты, страна, дни активности"
       >
-        <span className="multi-select-label">{label}</span>
+        <span className="filters-trigger-label">
+          <SlidersHorizontal size={16} />
+          Фильтры
+          {activeCount > 0 && <span className="filters-badge">{activeCount}</span>}
+        </span>
         <ChevronDown size={16} className={open ? 'flip' : ''} />
       </button>
       {open && (
-        <div className="multi-select-panel">
-          <label className="multi-select-search">
-            <Search size={14} />
-            <input
-              autoFocus
-              value={search}
-              aria-label="Поиск конкурента"
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Поиск конкурента"
-            />
-          </label>
-          <div className="multi-select-actions">
-            <button type="button" onClick={selectAllVisible} disabled={!matches.length}>
-              Выбрать все
-            </button>
-            <button type="button" onClick={() => onChange([])} disabled={!selectedIds.length}>
-              Сбросить
-            </button>
+        <div className="multi-select-panel filters-panel">
+          <CheckListFilter
+            title="Конкуренты"
+            options={competitorOptions}
+            selectedIds={filters.competitorIds}
+            onChange={(competitorIds) => onChange({ competitorIds })}
+            searchPlaceholder="Поиск конкурента"
+            emptyText="Ничего не найдено"
+          />
+          <CheckListFilter
+            title="Страна (ai_geo)"
+            options={geoFilterOptions}
+            selectedIds={filters.geos}
+            onChange={(geos) => onChange({ geos })}
+            searchPlaceholder="Поиск страны"
+            emptyText="Страны ещё не определены ИИ"
+          />
+          <div className="filters-section">
+            <div className="filters-section-head">
+              <span className="filters-section-title">Дни активности</span>
+            </div>
+            <div className="days-active-filter" role="group" aria-label="Фильтр по дням активности">
+              <select
+                className="days-active-op"
+                value={filters.daysActiveOp}
+                aria-label="Условие фильтра по дням активности"
+                onChange={(event) => onChange({ daysActiveOp: event.target.value as DaysActiveOp | '' })}
+              >
+                <option value="">Любое</option>
+                <option value=">">Больше (&gt;)</option>
+                <option value="<">Меньше (&lt;)</option>
+                <option value="=">Равно (=)</option>
+              </select>
+              <input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                className="days-active-value"
+                value={filters.daysActiveValue}
+                disabled={!filters.daysActiveOp}
+                placeholder="дней"
+                aria-label="Количество дней активности"
+                onChange={(event) => onChange({ daysActiveValue: event.target.value })}
+              />
+            </div>
           </div>
-          <div className="multi-select-list" role="group" aria-label="Конкуренты">
-            {matches.map((competitor) => (
-              <label key={competitor.id} className="multi-select-option">
-                <input
-                  type="checkbox"
-                  checked={selected.has(competitor.id)}
-                  onChange={() => toggleCompetitor(competitor.id)}
-                />
-                <span className="multi-select-option-name">{competitor.name}</span>
-              </label>
-            ))}
-            {!matches.length && <div className="multi-select-empty">Ничего не найдено</div>}
+          <div className="filters-panel-footer">
+            <button type="button" onClick={resetAll} disabled={!activeCount}>
+              Сбросить все фильтры
+            </button>
           </div>
         </div>
       )}
