@@ -242,8 +242,32 @@ export class ScrapeJobManager {
           }
         });
         errors.push(...result.errors.map((error) => `${competitor.name}: ${error}`));
+        // A "complete" scan is one that traversed the competitor's full active result set, so the
+        // observed library ids are a trustworthy snapshot of "what's active right now" — the only
+        // safe basis for reconciliation (especially for flipping vanished ads to "stopped").
+        //
+        // We deliberately DON'T require zero card errors anymore. The scraper now (a) saves a card
+        // from its snapshot when the detail panel doesn't open, and (b) has a catch-net that saves
+        // any identified-but-failed card from its snapshot too — so an errored card is still recorded
+        // as observed and won't be mistaken for "stopped". A few flaky cards therefore no longer
+        // freeze this competitor's statuses indefinitely. We still bail (and skip reconciliation) on:
+        //   - abort / limit reached -> the scan stopped early and didn't see the whole set;
+        //   - save errors -> an active ad may be missing from observations -> would be a false "stop";
+        //   - nothing observed at all -> never mass-mark a competitor's whole history "stopped" off an empty scan;
+        //   - a high card-error rate -> the page likely broke wholesale, so don't trust the snapshot.
+        // The residual risk is bounded: a card that errors *before* we get its library id (rare:
+        // couldn't scroll to it, no id parsed) is unobserved and may be flipped to "stopped", but it
+        // self-heals — the next scan that sees it flips it back to active.
+        const cardErrors = result.errors.length;
+        const attempts = result.ads.length + cardErrors;
+        const observedSomething = result.ads.length > 0;
+        const erroredHeavily = cardErrors > Math.max(3, Math.floor(attempts * 0.15));
         const competitorComplete =
-          !controller.signal.aborted && !limitReached && result.errors.length === 0 && competitorSaveErrors === 0;
+          !controller.signal.aborted &&
+          !limitReached &&
+          competitorSaveErrors === 0 &&
+          observedSomething &&
+          !erroredHeavily;
         const competitorScanStatus = competitorComplete
           ? 'succeeded'
           : controller.signal.aborted || limitReached

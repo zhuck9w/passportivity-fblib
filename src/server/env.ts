@@ -73,5 +73,10 @@ export const env = {
   // the project's "Max rows" setting (default 1000).
   adsFetchLimit: readNumber('ADS_FETCH_LIMIT', 1000),
   scraperNavigationTimeoutMs: readNumber('SCRAPER_NAVIGATION_TIMEOUT_MS', 45000),
-  scraperActionTimeoutMs: readNumber('SCRAPER_ACTION_TIMEOUT_MS', 12000)
+  scraperActionTimeoutMs: readNumber('SCRAPER_ACTION_TIMEOUT_MS', 12000),
+  // How long to wait for an opened card's detail/group panel to render before we give up and
+  // save the ad from its result-card snapshot instead. The old hard-coded 1200ms was too tight
+  // on a slow proxy: FB hadn't painted the detail panel yet, so the card was dropped with an
+  // error and the whole competitor scan was marked incomplete (which blocks status reconciliation).
+  scraperDetailWaitMs: readNumber('SCRAPER_DETAIL_WAIT_MS', 4000)
 };

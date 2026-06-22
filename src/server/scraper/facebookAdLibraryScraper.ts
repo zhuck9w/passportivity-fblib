@@ -6,6 +6,7 @@ import { env } from '../env';
 import { logScraper } from '../logger';
 import { playwrightProxy } from '../proxy';
 import {
+  buildSnapshotFallbackAd,
   extractCardFallbackAd,
   extractCardMediaSnapshot,
   extractCardSnapshot,
@@ -105,6 +106,9 @@ export class FacebookAdLibraryScraper {
       });
 
       for (let index = 0; index < cardsToProcess; index += 1) {
+        // Hoisted so the catch block can fall back to the card snapshot we already captured.
+        let snapshot: CardSnapshot | null = null;
+        let cardMedia: CardMediaSnapshot | null = null;
         try {
           throwIfStopped(options.signal);
           logScraper('info', 'Processing result card', {
@@ -117,8 +121,8 @@ export class FacebookAdLibraryScraper {
           await this.scrollToCard(page, config, index);
           const actionButton = this.resultActionButtons(page, config).nth(index);
           const card = this.cardFromActionButton(actionButton);
-          const snapshot = await extractCardSnapshot(card, config);
-          const cardMedia = await extractCardMediaSnapshot(card, options.collectCarousels ?? env.scraperCollectCarousels);
+          snapshot = await extractCardSnapshot(card, config);
+          cardMedia = await extractCardMediaSnapshot(card, options.collectCarousels ?? env.scraperCollectCarousels);
           logScraper('info', 'Result card media extracted', {
             competitor: competitor.name,
             card_number: index + 1,
@@ -146,6 +150,32 @@ export class FacebookAdLibraryScraper {
           const message = `Card ${index + 1}: ${error instanceof Error ? error.message : String(error)}`;
           errors.push(message);
           logScraper('error', 'Card processing failed', { competitor: competitor.name, error: message });
+
+          // Safety net for status reconciliation: reaching here means this card's ad was NOT
+          // saved (every success path returns before the throw). If we nonetheless identified the
+          // card — i.e. we have its library id from the snapshot — persist it from that snapshot so
+          // it's still recorded as observed in this scan. Without it, a still-active ad that merely
+          // failed to open would be absent from the current scan and reconciled to "stopped".
+          if (snapshot?.facebook_library_id) {
+            try {
+              const fallbackAd = buildSnapshotFallbackAd(snapshot, competitor.id, sourceUrl, {
+                mediaItems: cardMedia?.media_items,
+                previewHtml: cardMedia?.html
+              });
+              await options.onAd?.(fallbackAd);
+              logScraper('warn', 'Errored card saved from snapshot to preserve observation', {
+                competitor: competitor.name,
+                card_number: index + 1,
+                library_id: snapshot.facebook_library_id
+              });
+            } catch (fallbackError) {
+              logScraper('error', 'Snapshot safety-net save failed', {
+                competitor: competitor.name,
+                library_id: snapshot.facebook_library_id,
+                error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+              });
+            }
+          }
         }
       }
     } finally {
@@ -272,9 +302,27 @@ export class FacebookAdLibraryScraper {
       return [ad];
     }
 
-    if (await firstVisible(page, config.group.ready, 1200)) {
+    if (await firstVisible(page, config.group.ready, env.scraperDetailWaitMs)) {
       logScraper('info', 'Opened grouped ad detail', { library_id: snapshot.facebook_library_id });
       return this.processGroupedTargetAd(page, config, competitorId, sourceUrl, snapshot, options, cardMedia);
+    }
+
+    // The card opened but FB never rendered the detail or group panel (common on a slow proxy, or
+    // when FB tweaks the panel markup). Rather than dropping the card — which would both lose the
+    // creative AND mark the whole competitor scan incomplete, freezing status reconciliation — fall
+    // back to what the result card itself already gave us. We still record an observation for this
+    // library id, so reconciliation keeps treating the ad as currently-active instead of "stopped".
+    if (snapshot.facebook_library_id) {
+      logScraper('warn', 'Card detail/group did not appear; saving from card snapshot', {
+        library_id: snapshot.facebook_library_id,
+        card_media_items: cardMedia.media_items.length
+      });
+      const ad = buildSnapshotFallbackAd(snapshot, competitorId, sourceUrl, {
+        mediaItems: cardMedia.media_items,
+        previewHtml: cardMedia.html
+      });
+      await options.onAd?.(ad);
+      return [ad];
     }
 
     throw new Error('Opened card, but neither detail preview nor group view appeared');
@@ -415,7 +463,7 @@ export class FacebookAdLibraryScraper {
   }
 
   private async isDetailVisible(page: Page, config: SelectorConfig, snapshot?: CardSnapshot) {
-    if (await firstVisible(page, config.detail.ready, 1200)) return true;
+    if (await firstVisible(page, config.detail.ready, env.scraperDetailWaitMs)) return true;
     if (!snapshot) return false;
     return this.hasVisiblePreviewForSnapshot(page, config, snapshot);
   }

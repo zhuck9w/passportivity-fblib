@@ -546,6 +546,36 @@ export async function extractDetailAd(
   };
 }
 
+// Builds an ad purely from the result-card snapshot + the media already pulled from that card,
+// with no further page interaction. Used when an opened card never rendered its detail/group
+// panel: instead of dropping the card (which marks the scan incomplete and blocks reconciliation),
+// we persist what the card itself showed — id, status, dates, creative text, and thumbnail media.
+export function buildSnapshotFallbackAd(
+  snapshot: CardSnapshot,
+  competitorId: string,
+  sourceUrl: string,
+  options: ExtractAdOptions = {}
+): ScrapedAdInput {
+  const facebookLibraryId = snapshot.facebook_library_id ?? 'unknown';
+  return {
+    competitor_id: competitorId,
+    facebook_library_id: facebookLibraryId,
+    source_url: sourceUrl,
+    status: snapshot.status,
+    start_date_text: snapshot.start_date_text,
+    end_date_text: snapshot.end_date_text,
+    platforms: snapshot.platforms,
+    title: snapshot.title,
+    body_text: snapshot.body_text,
+    cta: snapshot.cta,
+    preview_html: options.previewHtml ?? null,
+    preview_text: snapshot.body_text,
+    media_items: options.mediaItems ?? [],
+    dedupe_key: facebookLibraryId,
+    locations: []
+  };
+}
+
 export async function extractCardFallbackAd(
   card: Locator,
   config: SelectorConfig,
