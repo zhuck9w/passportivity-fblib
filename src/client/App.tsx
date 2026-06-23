@@ -1,4 +1,5 @@
 import {
+  Check,
   CheckCircle2,
   ChevronDown,
   CirclePause,
@@ -14,6 +15,7 @@ import {
   Loader2,
   MapPinned,
   Menu,
+  Pencil,
   Pin,
   PinOff,
   Play,
@@ -2799,6 +2801,10 @@ function CompetitorsDialog({
   const [togglingEnabledId, setTogglingEnabledId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkEnabling, setBulkEnabling] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPageId, setEditPageId] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Drop selections for competitors that no longer exist (e.g. just deleted).
   useEffect(() => {
@@ -2840,6 +2846,27 @@ function CompetitorsDialog({
       console.error(bulkError);
     } finally {
       setBulkEnabling(false);
+    }
+  }
+
+  function startEdit(competitor: Competitor) {
+    setEditingId(competitor.id);
+    setEditName(competitor.name);
+    setEditPageId(competitor.facebook_page_id);
+  }
+
+  async function saveEdit(id: string) {
+    const name = editName.trim();
+    if (!name || !editPageId || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await updateCompetitor(id, { name, facebook_page_id: editPageId });
+      setEditingId(null);
+      onChanged();
+    } catch (editError) {
+      console.error(editError);
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -3031,89 +3058,152 @@ function CompetitorsDialog({
         )}
 
         <div className="competitor-list">
-          {competitors.map((competitor) => (
-            <div className="competitor-row" key={competitor.id}>
-              <input
-                type="checkbox"
-                className="competitor-select"
-                aria-label={`Выделить «${competitor.name}»`}
-                checked={selectedIds.has(competitor.id)}
-                onChange={() => toggleSelect(competitor.id)}
-              />
-              <div>
-                <strong>
-                  {competitor.name}
-                  <span className="competitor-count" title="Всего собрано креативов">
-                    {competitor.ad_count ?? 0}
-                  </span>
-                </strong>
-                <span>{competitor.facebook_page_id}</span>
-                <small>
-                  последний сбор:{' '}
-                  {competitor.last_scraped_at ? new Date(competitor.last_scraped_at).toLocaleString('ru-RU') : 'еще не было'}
-                </small>
-              </div>
-              <div className={`switch-wrap ${togglingEnabledId === competitor.id ? 'is-toggling' : ''}`.trim()}>
-                <label
-                  className="switch"
-                  title={competitor.enabled ? 'Участвует в сборе — отключить' : 'Не участвует в сборе — включить'}
-                >
-                  <input
-                    type="checkbox"
-                    aria-label={competitor.enabled ? 'Отключить конкурента из сбора' : 'Включить конкурента в сбор'}
-                    checked={competitor.enabled}
-                    disabled={togglingEnabledId === competitor.id}
-                    onChange={(event) => void handleToggleEnabled(competitor, event.target.checked)}
-                  />
-                  <span />
-                </label>
-                {togglingEnabledId === competitor.id && (
-                  <span className="switch-spinner">
-                    <Loader2 size={14} className="spin" />
-                  </span>
+          {competitors.map((competitor) => {
+            const isEditing = editingId === competitor.id;
+            return (
+              <div className={`competitor-row ${isEditing ? 'is-editing' : ''}`.trim()} key={competitor.id}>
+                <input
+                  type="checkbox"
+                  className="competitor-select"
+                  aria-label={`Выделить «${competitor.name}»`}
+                  checked={selectedIds.has(competitor.id)}
+                  onChange={() => toggleSelect(competitor.id)}
+                />
+                <div>
+                  {isEditing ? (
+                    <>
+                      <input
+                        className="competitor-edit-input"
+                        value={editName}
+                        onChange={(event) => setEditName(event.target.value)}
+                        placeholder="Название"
+                        aria-label="Название конкурента"
+                      />
+                      <input
+                        className="competitor-edit-input"
+                        value={editPageId}
+                        onChange={(event) => setEditPageId(event.target.value.replace(/\D/g, ''))}
+                        placeholder="Facebook Page ID"
+                        inputMode="numeric"
+                        aria-label="Facebook Page ID"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <strong>
+                        {competitor.name}
+                        <span className="competitor-count" title="Всего собрано креативов">
+                          {competitor.ad_count ?? 0}
+                        </span>
+                      </strong>
+                      <span>{competitor.facebook_page_id}</span>
+                      <small>
+                        последний сбор:{' '}
+                        {competitor.last_scraped_at
+                          ? new Date(competitor.last_scraped_at).toLocaleString('ru-RU')
+                          : 'еще не было'}
+                      </small>
+                    </>
+                  )}
+                </div>
+                {isEditing ? (
+                  <div className="competitor-edit-actions">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => void saveEdit(competitor.id)}
+                      disabled={savingEdit || !editName.trim() || !editPageId}
+                      title="Сохранить изменения"
+                    >
+                      {savingEdit ? <Loader2 size={17} className="spin" /> : <Check size={17} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setEditingId(null)}
+                      disabled={savingEdit}
+                      title="Отменить"
+                    >
+                      <X size={17} />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className={`switch-wrap ${togglingEnabledId === competitor.id ? 'is-toggling' : ''}`.trim()}>
+                      <label
+                        className="switch"
+                        title={competitor.enabled ? 'Участвует в сборе — отключить' : 'Не участвует в сборе — включить'}
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label={competitor.enabled ? 'Отключить конкурента из сбора' : 'Включить конкурента в сбор'}
+                          checked={competitor.enabled}
+                          disabled={togglingEnabledId === competitor.id}
+                          onChange={(event) => void handleToggleEnabled(competitor, event.target.checked)}
+                        />
+                        <span />
+                      </label>
+                      {togglingEnabledId === competitor.id && (
+                        <span className="switch-spinner">
+                          <Loader2 size={14} className="spin" />
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => startEdit(competitor)}
+                      title="Редактировать название и ID"
+                    >
+                      <Pencil size={17} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`icon-button ${competitor.visible === false ? 'visibility-off' : ''}`.trim()}
+                      onClick={() =>
+                        updateCompetitor(competitor.id, { visible: competitor.visible === false })
+                          .then(onChanged)
+                          .catch(console.error)
+                      }
+                      title={
+                        competitor.visible === false
+                          ? 'Объявления скрыты из выдачи — показать'
+                          : 'Объявления видны в выдаче — скрыть'
+                      }
+                    >
+                      {competitor.visible === false ? <EyeOff size={17} /> : <Eye size={17} />}
+                    </button>
+                    <a
+                      className="icon-button"
+                      href={buildAdLibraryUrl(competitor.facebook_page_id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Открыть страницу объявлений конкурента в Facebook Ad Library"
+                    >
+                      <ExternalLink size={17} />
+                    </a>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => onScrape(competitor.id)}
+                      title={scrapeRunning ? 'Сбор уже идёт' : 'Собрать этого конкурента'}
+                      disabled={scrapeRunning}
+                    >
+                      <Play size={17} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button danger-button"
+                      onClick={() => deleteCompetitor(competitor.id).then(onChanged).catch(console.error)}
+                      title="Удалить"
+                    >
+                      <Trash2 size={17} />
+                    </button>
+                  </>
                 )}
               </div>
-              <button
-                className={`icon-button ${competitor.visible === false ? 'visibility-off' : ''}`.trim()}
-                onClick={() =>
-                  updateCompetitor(competitor.id, { visible: competitor.visible === false })
-                    .then(onChanged)
-                    .catch(console.error)
-                }
-                title={
-                  competitor.visible === false
-                    ? 'Объявления скрыты из выдачи — показать'
-                    : 'Объявления видны в выдаче — скрыть'
-                }
-              >
-                {competitor.visible === false ? <EyeOff size={17} /> : <Eye size={17} />}
-              </button>
-              <a
-                className="icon-button"
-                href={buildAdLibraryUrl(competitor.facebook_page_id)}
-                target="_blank"
-                rel="noreferrer"
-                title="Открыть страницу объявлений конкурента в Facebook Ad Library"
-              >
-                <ExternalLink size={17} />
-              </a>
-              <button
-                className="icon-button"
-                onClick={() => onScrape(competitor.id)}
-                title={scrapeRunning ? 'Сбор уже идёт' : 'Собрать этого конкурента'}
-                disabled={scrapeRunning}
-              >
-                <Play size={17} />
-              </button>
-              <button
-                className="icon-button danger-button"
-                onClick={() => deleteCompetitor(competitor.id).then(onChanged).catch(console.error)}
-                title="Удалить"
-              >
-                <Trash2 size={17} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

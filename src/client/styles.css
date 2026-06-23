@@ -1532,15 +1532,42 @@ select,
   padding: 0 16px 16px;
 }
 
-/* Columns: select checkbox · info · enable switch · visibility · open-in-FB · scrape · delete */
+/* Columns: select checkbox · info · enable switch · edit · visibility · open-in-FB · scrape · delete */
 .competitor-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid #dde3e7;
   border-radius: 8px;
   padding: 12px;
+}
+
+/* While editing a row: checkbox · inputs · save/cancel. */
+.competitor-row.is-editing {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.competitor-edit-input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #c9d3d9;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #172026;
+  background: #fff;
+}
+
+.competitor-edit-input:focus {
+  outline: none;
+  border-color: #1769e0;
+}
+
+.competitor-row .competitor-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .competitor-select {
