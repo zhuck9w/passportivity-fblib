@@ -16,6 +16,7 @@ app.use(express.json({ limit: '20mb' }));
 
 const scrapeStartSchema = z.object({
   competitor_id: z.string().uuid().optional(),
+  competitor_ids: z.array(z.string().uuid()).min(1).max(500).optional(),
   limit: z.number().int().positive().max(500).optional(),
   collect_carousels: z.boolean().optional()
 });
@@ -66,6 +67,7 @@ app.post(
     res.status(202).json(
       await scrapeJobManager.start({
         competitorId: input.competitor_id,
+        competitorIds: input.competitor_ids,
         limit: input.limit,
         collectCarousels: input.collect_carousels
       })

@@ -39,6 +39,7 @@ import {
   useRef,
   useState
 } from 'react';
+import { buildAdLibraryUrl } from '../shared/adLibraryUrl';
 import { nonCountryGeoValues, splitGeoValues } from '../shared/countries';
 import { adAiAssessmentKeys } from '../shared/types';
 import type {
@@ -53,6 +54,7 @@ import type {
 import {
   bulkCreateCompetitors,
   bulkSetAdHidden,
+  bulkSetCompetitorsEnabled,
   createCompetitor,
   deleteCompetitor,
   fetchAd,
@@ -1263,6 +1265,17 @@ export function App() {
     }
   }
 
+  async function handleStartScrapeSelected(ids: string[]) {
+    if (!ids.length) return;
+    setError(null);
+    try {
+      const nextJob = await startScrape({ competitorIds: ids, collectCarousels });
+      setJob(nextJob);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
+  }
+
   async function handleStopScrape() {
     if (!job) return;
     setError(null);
@@ -2244,6 +2257,7 @@ export function App() {
           onClose={() => setCompetitorsOpen(false)}
           onChanged={() => void refresh()}
           onScrape={(id) => void handleStartScrape(id)}
+          onScrapeSelected={(ids) => void handleStartScrapeSelected(ids)}
           scrapeRunning={job?.status === 'running'}
         />
       )}
@@ -2494,12 +2508,14 @@ function SelectAllCheckbox({
   checked,
   indeterminate,
   disabled,
-  onToggle
+  onToggle,
+  selectAllLabel = 'Выделить все объявления'
 }: {
   checked: boolean;
   indeterminate: boolean;
   disabled?: boolean;
   onToggle: () => void;
+  selectAllLabel?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
 
@@ -2507,6 +2523,7 @@ function SelectAllCheckbox({
     if (ref.current) ref.current.indeterminate = indeterminate && !checked;
   }, [indeterminate, checked]);
 
+  const label = checked ? 'Снять выделение со всех' : selectAllLabel;
   return (
     <input
       ref={ref}
@@ -2515,8 +2532,8 @@ function SelectAllCheckbox({
       checked={checked}
       disabled={disabled}
       readOnly
-      title={checked ? 'Снять выделение со всех' : 'Выделить все объявления'}
-      aria-label={checked ? 'Снять выделение со всех' : 'Выделить все объявления'}
+      title={label}
+      aria-label={label}
       onClick={onToggle}
     />
   );
@@ -2762,12 +2779,14 @@ function CompetitorsDialog({
   onClose,
   onChanged,
   onScrape,
+  onScrapeSelected,
   scrapeRunning
 }: {
   competitors: Competitor[];
   onClose: () => void;
   onChanged: () => void;
   onScrape: (id: string) => void;
+  onScrapeSelected: (ids: string[]) => void;
   scrapeRunning: boolean;
 }) {
   const [name, setName] = useState('');
@@ -2778,6 +2797,51 @@ function CompetitorsDialog({
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkFeedback, setBulkFeedback] = useState<{ added: number; problems: string[] } | null>(null);
   const [togglingEnabledId, setTogglingEnabledId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkEnabling, setBulkEnabling] = useState(false);
+
+  // Drop selections for competitors that no longer exist (e.g. just deleted).
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (!current.size) return current;
+      const existing = new Set(competitors.map((competitor) => competitor.id));
+      const next = new Set([...current].filter((id) => existing.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [competitors]);
+
+  const allSelected = competitors.length > 0 && competitors.every((competitor) => selectedIds.has(competitor.id));
+  const someSelected = selectedIds.size > 0;
+
+  function toggleSelect(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((current) =>
+      current.size === competitors.length ? new Set() : new Set(competitors.map((competitor) => competitor.id))
+    );
+  }
+
+  async function handleBulkSetEnabled(enabled: boolean) {
+    const ids = competitors.filter((competitor) => selectedIds.has(competitor.id)).map((competitor) => competitor.id);
+    if (!ids.length || bulkEnabling) return;
+    setBulkEnabling(true);
+    try {
+      await bulkSetCompetitorsEnabled(ids, enabled);
+      setSelectedIds(new Set());
+      onChanged();
+    } catch (bulkError) {
+      console.error(bulkError);
+    } finally {
+      setBulkEnabling(false);
+    }
+  }
 
   async function handleToggleEnabled(competitor: Competitor, enabled: boolean) {
     setTogglingEnabledId(competitor.id);
@@ -2909,9 +2973,73 @@ function CompetitorsDialog({
           </div>
         </form>
 
+        {competitors.length > 0 && (
+          <div className="competitor-bulk-bar">
+            <label className="competitor-bulk-selectall">
+              <SelectAllCheckbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                disabled={!competitors.length}
+                onToggle={toggleSelectAll}
+                selectAllLabel="Выделить всех конкурентов"
+              />
+              <span>
+                Выбрано {selectedIds.size} из {competitors.length}
+              </span>
+            </label>
+            <div className="competitor-bulk-bar-actions">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!someSelected || scrapeRunning}
+                onClick={() => onScrapeSelected([...selectedIds])}
+                title={scrapeRunning ? 'Сбор уже идёт' : 'Запустить сбор по выделенным конкурентам'}
+              >
+                {scrapeRunning ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+                Собрать{someSelected ? ` (${selectedIds.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!someSelected || bulkEnabling}
+                onClick={() => void handleBulkSetEnabled(false)}
+                title="Отключить выделенных конкурентов из сбора"
+              >
+                {bulkEnabling ? <Loader2 size={16} className="spin" /> : <CirclePause size={16} />}
+                Отключить{someSelected ? ` (${selectedIds.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!someSelected || bulkEnabling}
+                onClick={() => void handleBulkSetEnabled(true)}
+                title="Включить выделенных конкурентов в сбор"
+              >
+                <CheckCircle2 size={16} />
+                Включить
+              </button>
+              <button
+                type="button"
+                className="selection-link"
+                disabled={!someSelected}
+                onClick={() => setSelectedIds(new Set())}
+              >
+                Снять
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="competitor-list">
           {competitors.map((competitor) => (
             <div className="competitor-row" key={competitor.id}>
+              <input
+                type="checkbox"
+                className="competitor-select"
+                aria-label={`Выделить «${competitor.name}»`}
+                checked={selectedIds.has(competitor.id)}
+                onChange={() => toggleSelect(competitor.id)}
+              />
               <div>
                 <strong>{competitor.name}</strong>
                 <span>{competitor.facebook_page_id}</span>
@@ -2955,6 +3083,15 @@ function CompetitorsDialog({
               >
                 {competitor.visible === false ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
+              <a
+                className="icon-button"
+                href={buildAdLibraryUrl(competitor.facebook_page_id)}
+                target="_blank"
+                rel="noreferrer"
+                title="Открыть страницу объявлений конкурента в Facebook Ad Library"
+              >
+                <ExternalLink size={17} />
+              </a>
               <button
                 className="icon-button"
                 onClick={() => onScrape(competitor.id)}

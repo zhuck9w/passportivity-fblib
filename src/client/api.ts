@@ -84,6 +84,14 @@ export function deleteCompetitor(id: string) {
   return api<void>(`/api/competitors/${id}`, { method: 'DELETE' });
 }
 
+// Bulk enable/disable competitors (participation in scraping) for the selected ids.
+export function bulkSetCompetitorsEnabled(ids: string[], enabled: boolean) {
+  return api<{ updated: number; ids: string[] }>('/api/competitors/bulk-enabled', {
+    method: 'POST',
+    body: JSON.stringify({ ids, enabled })
+  });
+}
+
 export function fetchAds(filters: { competitorIds?: string[]; status?: string; q?: string }) {
   const params = new URLSearchParams();
   if (filters.competitorIds?.length) params.set('competitor_ids', filters.competitorIds.join(','));
@@ -135,11 +143,17 @@ export function fetchScrapeRuns() {
 
 // --- Scraper service (separate origin) ---
 
-export function startScrape(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
+export function startScrape(input: {
+  competitorId?: string;
+  competitorIds?: string[];
+  limit?: number;
+  collectCarousels?: boolean;
+}) {
   return scraperApi<ScrapeJobSnapshot>('/api/scrape', {
     method: 'POST',
     body: JSON.stringify({
       competitor_id: input.competitorId,
+      competitor_ids: input.competitorIds,
       limit: input.limit,
       collect_carousels: input.collectCarousels
     })

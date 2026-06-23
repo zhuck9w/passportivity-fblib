@@ -8,6 +8,7 @@ import { isProxyEnabled, proxiedFetch } from './proxy';
 import {
   bulkCreateCompetitors,
   bulkSetAdHidden,
+  bulkSetCompetitorsEnabled,
   createCompetitor,
   deleteCompetitor,
   getAd,
@@ -37,6 +38,11 @@ const competitorUpdateSchema = competitorCreateSchema.partial();
 
 const competitorBulkSchema = z.object({
   items: z.array(competitorCreateSchema).min(1).max(500)
+});
+
+const competitorBulkEnabledSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(1000),
+  enabled: z.boolean()
 });
 
 const adUpdateSchema = z.object({
@@ -90,6 +96,14 @@ app.post(
   asyncRoute(async (req, res) => {
     const { items } = competitorBulkSchema.parse(req.body);
     res.status(201).json(await bulkCreateCompetitors(items));
+  })
+);
+
+app.post(
+  '/api/competitors/bulk-enabled',
+  asyncRoute(async (req, res) => {
+    const { ids, enabled } = competitorBulkEnabledSchema.parse(req.body);
+    res.json(await bulkSetCompetitorsEnabled(ids, enabled));
   })
 );
 

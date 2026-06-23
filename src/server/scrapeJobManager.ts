@@ -13,6 +13,7 @@ import {
   finishCompetitorScan,
   getCompetitor,
   listCompetitorCanonicalImages,
+  listCompetitorsByIds,
   listEnabledCompetitors,
   markAdAsDuplicate,
   markCompetitorScraped,
@@ -51,7 +52,7 @@ export class ScrapeJobManager {
   private readonly controllers = new Map<string, AbortController>();
   private readonly scraper = new FacebookAdLibraryScraper();
 
-  async start(input: { competitorId?: string; limit?: number; collectCarousels?: boolean }) {
+  async start(input: { competitorId?: string; competitorIds?: string[]; limit?: number; collectCarousels?: boolean }) {
     // One run at a time: the scraper shares a single persistent browser profile, so a second
     // concurrent run would collide on the profile lock. Re-attach to the in-progress run instead
     // of starting another. Guards the API for direct callers / multiple devices, not just the UI.
@@ -62,7 +63,7 @@ export class ScrapeJobManager {
       });
       return activeJob;
     }
-    const competitors = await this.resolveCompetitors(input.competitorId);
+    const competitors = await this.resolveCompetitors(input.competitorId, input.competitorIds);
     const runLimit = Math.max(1, input.limit ?? env.scraperLimit);
     const collectCarousels = input.collectCarousels ?? env.scraperCollectCarousels;
     const run = await createScrapeRun(input.competitorId ?? null);
@@ -128,7 +129,15 @@ export class ScrapeJobManager {
     return Array.from(this.jobs.values()).sort((a, b) => b.started_at.localeCompare(a.started_at));
   }
 
-  private async resolveCompetitors(competitorId?: string) {
+  private async resolveCompetitors(competitorId?: string, competitorIds?: string[]) {
+    // Explicit multi-selection from the dashboard takes precedence: scrape exactly those.
+    if (competitorIds?.length) {
+      const competitors = await listCompetitorsByIds(competitorIds);
+      if (!competitors.length) {
+        throw new Error('Выбранные конкуренты не найдены');
+      }
+      return competitors;
+    }
     if (competitorId) {
       return [await getCompetitor(competitorId)];
     }

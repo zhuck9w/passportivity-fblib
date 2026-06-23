@@ -52,6 +52,14 @@ export async function listEnabledCompetitors() {
   return throwIfError<Competitor[]>(result);
 }
 
+// Resolve a specific set of competitors by id (used to scrape just the ones the user selected).
+// Returns whichever ids exist — ignores the `enabled` flag, since selecting them is the explicit ask.
+export async function listCompetitorsByIds(ids: string[]) {
+  if (!ids.length) return [];
+  const result = await supabase.from('competitors').select('*').in('id', ids);
+  return throwIfError<Competitor[]>(result);
+}
+
 export async function createCompetitor(input: {
   name: string;
   facebook_page_id: string;
@@ -105,6 +113,17 @@ export async function updateCompetitor(
     .select('*')
     .single();
   return throwIfError<Competitor>(result);
+}
+
+export async function bulkSetCompetitorsEnabled(ids: string[], enabled: boolean) {
+  if (!ids.length) return { updated: 0, ids: [] as string[] };
+  const result = await supabase
+    .from('competitors')
+    .update({ enabled, updated_at: new Date().toISOString() })
+    .in('id', ids)
+    .select('id');
+  const rows = throwIfError<Array<Pick<Competitor, 'id'>>>(result);
+  return { updated: rows.length, ids: rows.map((row) => row.id) };
 }
 
 export async function deleteCompetitor(id: string) {

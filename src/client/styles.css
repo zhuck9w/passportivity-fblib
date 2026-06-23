@@ -1532,14 +1532,49 @@ select,
   padding: 0 16px 16px;
 }
 
+/* Columns: select checkbox · info · enable switch · visibility · open-in-FB · scrape · delete */
 .competitor-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid #dde3e7;
   border-radius: 8px;
   padding: 12px;
+}
+
+.competitor-select {
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+  accent-color: #1769e0;
+}
+
+.competitor-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 16px 10px;
+  padding: 8px 12px;
+  border: 1px solid #dde3e7;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.competitor-bulk-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #586670;
+  font-size: 13px;
+}
+
+.competitor-bulk-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .icon-button.visibility-off {
