@@ -10,6 +10,7 @@ export type SelectorConfig = {
     summaryButtons: string[];
     summaryButtonLabels: string[];
     errorMarkers: string[];
+    emptyMarkers: string[];
     libraryIdRegex: string;
     dateStartedRegex: string;
     dateRangeRegex: string;

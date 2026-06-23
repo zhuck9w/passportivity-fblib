@@ -78,5 +78,9 @@ export const env = {
   // save the ad from its result-card snapshot instead. The old hard-coded 1200ms was too tight
   // on a slow proxy: FB hadn't painted the detail panel yet, so the card was dropped with an
   // error and the whole competitor scan was marked incomplete (which blocks status reconciliation).
-  scraperDetailWaitMs: readNumber('SCRAPER_DETAIL_WAIT_MS', 4000)
+  scraperDetailWaitMs: readNumber('SCRAPER_DETAIL_WAIT_MS', 4000),
+  // Randomized pause (ms) between processing cards — picks a value in [min, max) each time to look
+  // less like a bot and ease Meta's rate limiting. Set both to 0 to disable.
+  scraperCardDelayMinMs: readNumber('SCRAPER_CARD_DELAY_MIN_MS', 800),
+  scraperCardDelayMaxMs: readNumber('SCRAPER_CARD_DELAY_MAX_MS', 2500)
 };

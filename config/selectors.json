@@ -12,6 +12,11 @@
       "text=Страница недоступна",
       "text=Произошла ошибка :("
     ],
+    "emptyMarkers": [
+      "text=Нет объявлений, соответствующих",
+      "text=No ads match your search",
+      "text=No results found"
+    ],
     "libraryIdRegex": "ID Библиотеки:\\s*([0-9]+)",
     "dateStartedRegex": "Показ начат\\s+([^\\n]+)",
     "dateRangeRegex": "С\\s+([^\\n]+?)\\s+по\\s+([^\\n]+)",

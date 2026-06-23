@@ -262,12 +262,16 @@ export class ScrapeJobManager {
         const attempts = result.ads.length + cardErrors;
         const observedSomething = result.ads.length > 0;
         const erroredHeavily = cardErrors > Math.max(3, Math.floor(attempts * 0.15));
+        // A logged-out fallback scan only sees a small subset of the active set, so it must not
+        // drive reconciliation (it would mass-flip the login-only ads to "stopped"). Its ads are
+        // still saved/refreshed via onAd — we just skip stop-detection by treating it as incomplete.
         const competitorComplete =
           !controller.signal.aborted &&
           !limitReached &&
           competitorSaveErrors === 0 &&
           observedSomething &&
-          !erroredHeavily;
+          !erroredHeavily &&
+          !result.usedLoggedOutFallback;
         const competitorScanStatus = competitorComplete
           ? 'succeeded'
           : controller.signal.aborted || limitReached

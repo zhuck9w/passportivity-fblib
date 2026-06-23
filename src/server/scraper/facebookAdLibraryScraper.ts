@@ -19,6 +19,11 @@ import { clickFirstVisible, firstVisible, loadSelectorConfig, type SelectorConfi
 export type ScrapeCompetitorResult = {
   ads: ScrapedAdInput[];
   errors: string[];
+  // True when we had to retry this competitor logged-out (the profile saw 0 cards). The logged-out
+  // Ad Library returns a much smaller subset, so such a scan is NOT a trustworthy snapshot of the
+  // full active set — the caller must not use it to reconcile "stopped" (it would mass-flip the
+  // ads that are simply invisible without a login). The collected ads are still saved/refreshed.
+  usedLoggedOutFallback?: boolean;
 };
 
 type ScrapeCompetitorOptions = {
@@ -34,6 +39,13 @@ function throwIfStopped(signal?: AbortSignal) {
   }
 }
 
+// Random integer in [min, max). Used for human-like, jittered pauses between cards.
+function randomBetween(min: number, max: number) {
+  const lo = Math.max(0, Math.min(min, max));
+  const hi = Math.max(lo, max);
+  return Math.floor(lo + Math.random() * (hi - lo));
+}
+
 function resolveUserDataDir(userDataDir: string) {
   return path.isAbsolute(userDataDir) ? userDataDir : path.resolve(process.cwd(), userDataDir);
 }
@@ -41,13 +53,62 @@ function resolveUserDataDir(userDataDir: string) {
 export class FacebookAdLibraryScraper {
   private readonly configPromise = loadSelectorConfig();
 
+  // Default: scrape under the logged-in profile (if one is configured). If that turns up ZERO cards
+  // — what a soft-blocked Facebook account looks like ("no ads matching your search") — OR fails
+  // outright (e.g. the soft-block just hangs the page to a timeout), we retry the SAME competitor
+  // logged-out (fresh context, no profile). The Ad Library is public, so a logged-out view often
+  // still returns results when the flagged account sees nothing.
+  //
+  // Double-save safety: we only fall back when the profile attempt collected NOTHING — either a
+  // clean 0-cards return, or a throw. A throw can only originate before the card loop starts
+  // (per-card errors are caught and never propagate; only an abort does), so no ad was saved yet.
   async scrapeCompetitor(competitor: Competitor, options: ScrapeCompetitorOptions = {}): Promise<ScrapeCompetitorResult> {
+    const hasProfile = Boolean(env.scraperUserDataDir);
+
+    if (!hasProfile) {
+      // No profile configured: logged-out IS the normal mode, not a degraded fallback — so it still
+      // reconciles normally (no usedLoggedOutFallback flag).
+      const only = await this.scrapeCompetitorWithMode(competitor, options, false);
+      return { ads: only.ads, errors: only.errors };
+    }
+
+    let profileFailure: string | null = null;
+    try {
+      const first = await this.scrapeCompetitorWithMode(competitor, options, true);
+      if (first.cardsFound > 0) {
+        return { ads: first.ads, errors: first.errors };
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw error; // user stop — don't silently retry
+      profileFailure = error instanceof Error ? error.message : String(error);
+    }
+
+    throwIfStopped(options.signal);
+    logScraper('warn', profileFailure
+      ? 'Profile attempt failed before collecting — retrying this competitor logged-out'
+      : 'No cards under the Facebook profile — retrying this competitor logged-out (possible Ad Library soft-block)', {
+      competitor: competitor.name,
+      profile_error: profileFailure
+    });
+    const second = await this.scrapeCompetitorWithMode(competitor, options, false);
+    logScraper(second.cardsFound > 0 ? 'info' : 'warn', second.cardsFound > 0 ? 'Logged-out fallback collected ads' : 'Logged-out fallback also found no ads', {
+      competitor: competitor.name,
+      cards: second.cardsFound
+    });
+    return { ads: second.ads, errors: second.errors, usedLoggedOutFallback: true };
+  }
+
+  private async scrapeCompetitorWithMode(
+    competitor: Competitor,
+    options: ScrapeCompetitorOptions,
+    useProfile: boolean
+  ): Promise<ScrapeCompetitorResult & { cardsFound: number }> {
     const config = await this.configPromise;
     const limit = options.limit ?? env.scraperMaxAds;
     const collectCarousels = options.collectCarousels ?? env.scraperCollectCarousels;
     const sourceUrl = buildAdLibraryUrl(competitor.facebook_page_id);
     let browser: Browser | null = null;
-    let context: BrowserContext;
+    let context: BrowserContext | null = null;
     const launchOptions = {
       headless: env.scraperHeadless,
       slowMo: env.scraperSlowMoMs,
@@ -55,52 +116,73 @@ export class FacebookAdLibraryScraper {
       // Routes all browser traffic (FB pages + fbcdn media) through the proxy when set.
       proxy: playwrightProxy()
     };
-
-    if (env.scraperUserDataDir) {
-      const userDataDir = resolveUserDataDir(env.scraperUserDataDir);
-      logScraper('info', 'Using persistent browser profile', {
-        user_data_dir: userDataDir,
-        channel: env.scraperBrowserChannel ?? 'playwright-chromium'
-      });
-      context = await chromium.launchPersistentContext(userDataDir, {
-        ...launchOptions,
-        locale: 'ru-RU',
-        viewport: { width: 1440, height: 1000 }
-      });
-    } else {
-      browser = await chromium.launch(launchOptions);
-      context = await browser.newContext({
-        locale: 'ru-RU',
-        viewport: { width: 1440, height: 1000 }
-      });
-    }
+    // Registered before the try so the finally always removes this exact reference. Null-safe
+    // because the context may not be created yet if abort fires mid-launch.
     const stopHandler = () => {
-      void context.close().catch(() => undefined);
+      void context?.close().catch(() => undefined);
       void browser?.close().catch(() => undefined);
     };
     options.signal?.addEventListener('abort', stopHandler, { once: true });
-    const page = await context.newPage();
-    await page.addInitScript('globalThis.__name = globalThis.__name || ((target) => target)');
-    await page.evaluate('globalThis.__name = globalThis.__name || ((target) => target)').catch(() => undefined);
     const ads: ScrapedAdInput[] = [];
     const errors: string[] = [];
+    let cardsToProcess = 0;
 
     try {
       throwIfStopped(options.signal);
+      // Create the context INSIDE the try so the finally tears it down even if page setup throws —
+      // otherwise a leaked persistent context keeps the userDataDir profile lock held and the next
+      // launch on that profile fails.
+      if (useProfile && env.scraperUserDataDir) {
+        const userDataDir = resolveUserDataDir(env.scraperUserDataDir);
+        logScraper('info', 'Using persistent browser profile', {
+          competitor: competitor.name,
+          user_data_dir: userDataDir,
+          channel: env.scraperBrowserChannel ?? 'playwright-chromium'
+        });
+        context = await chromium.launchPersistentContext(userDataDir, {
+          ...launchOptions,
+          locale: 'ru-RU',
+          viewport: { width: 1440, height: 1000 }
+        });
+      } else {
+        // Fresh, logged-out context: either no profile is configured, or this is the logged-out retry.
+        logScraper('info', 'Using fresh logged-out browser context', { competitor: competitor.name });
+        browser = await chromium.launch(launchOptions);
+        context = await browser.newContext({
+          locale: 'ru-RU',
+          viewport: { width: 1440, height: 1000 }
+        });
+      }
+      const page = await context.newPage();
+      await page.addInitScript('globalThis.__name = globalThis.__name || ((target) => target)');
+      await page.evaluate('globalThis.__name = globalThis.__name || ((target) => target)').catch(() => undefined);
+
       logScraper('info', 'Opening Ad Library page', {
         competitor: competitor.name,
         page_id: competitor.facebook_page_id,
+        use_profile: useProfile,
         limit,
         collect_carousels: collectCarousels
       });
-      await this.openResults(page, sourceUrl, config);
-      await this.logLoginState(context, page, competitor.name);
+      const state = await this.openResults(page, sourceUrl, config);
+      if (useProfile) await this.logLoginState(context, page, competitor.name);
+
+      // Explicit "no ads matching" page → 0 cards without waiting out the navigation timeout.
+      if (state === 'empty') {
+        logScraper('warn', 'Ad Library reported no matching ads', {
+          competitor: competitor.name,
+          use_profile: useProfile
+        });
+        return { ads, errors, cardsFound: 0 };
+      }
+
       await this.scrollResults(page, config, limit);
 
       const totalCards = await this.resultActionButtons(page, config).count();
-      const cardsToProcess = Math.min(totalCards, limit);
+      cardsToProcess = Math.min(totalCards, limit);
       logScraper('info', 'Result cards discovered', {
         competitor: competitor.name,
+        use_profile: useProfile,
         total_cards: totalCards,
         cards_to_process: cardsToProcess
       });
@@ -177,14 +259,19 @@ export class FacebookAdLibraryScraper {
             }
           }
         }
+
+        // Human-like, randomized pause between cards to look less like a bot (and ease rate limits).
+        if (index < cardsToProcess - 1 && !options.signal?.aborted) {
+          await page.waitForTimeout(randomBetween(env.scraperCardDelayMinMs, env.scraperCardDelayMaxMs));
+        }
       }
     } finally {
       options.signal?.removeEventListener('abort', stopHandler);
-      await context.close().catch(() => undefined);
+      await context?.close().catch(() => undefined);
       await browser?.close().catch(() => undefined);
     }
 
-    return { ads, errors };
+    return { ads, errors, cardsFound: cardsToProcess };
   }
 
   private async openResults(page: Page, sourceUrl: string, config: SelectorConfig) {
@@ -193,8 +280,9 @@ export class FacebookAdLibraryScraper {
     if (state === 'error') {
       logScraper('warn', 'Meta returned an error state, reloading once');
       await page.reload({ waitUntil: 'domcontentloaded', timeout: env.scraperNavigationTimeoutMs });
-      await this.waitForResultsOrError(page, config, true);
+      return this.waitForResultsOrError(page, config, true);
     }
+    return state;
   }
 
   // Logs whether the persistent profile is still authenticated with Facebook. FB sets the
@@ -224,14 +312,31 @@ export class FacebookAdLibraryScraper {
     }
   }
 
-  private async waitForResultsOrError(page: Page, config: SelectorConfig, throwOnError = false) {
+  private async waitForResultsOrError(
+    page: Page,
+    config: SelectorConfig,
+    throwOnError = false
+  ): Promise<'results' | 'ready' | 'empty' | 'error'> {
     const startedAt = Date.now();
     while (Date.now() - startedAt < env.scraperNavigationTimeoutMs) {
+      // Check for real cards FIRST: a populated page also contains the "Результаты" header text,
+      // so the ready/empty markers below only win when no cards are present.
       if ((await this.resultActionButtons(page, config).count().catch(() => 0)) > 0) return 'results';
       if ((await page.locator(config.results.adCard).count().catch(() => 0)) > 0) return 'results';
       if (await firstVisible(page, config.results.errorMarkers, 250)) {
         if (throwOnError) throw new Error('Meta returned an error page after reload');
         return 'error';
+      }
+      // "Нет объявлений, соответствующих вашим критериям поиска" — genuine empty result OR the
+      // signature of a soft-blocked account. Either way: 0 cards, so the caller can decide to retry.
+      // FB sometimes flashes this placeholder before cards hydrate, so confirm it sticks (and no
+      // cards appeared) before declaring 'empty' — a false 'empty' would needlessly trigger the
+      // logged-out retry and suppress that competitor's reconciliation.
+      if (await firstVisible(page, config.results.emptyMarkers, 250)) {
+        await page.waitForTimeout(1500);
+        if ((await this.resultActionButtons(page, config).count().catch(() => 0)) > 0) return 'results';
+        if ((await page.locator(config.results.adCard).count().catch(() => 0)) > 0) return 'results';
+        return 'empty';
       }
       if (await firstVisible(page, config.results.ready, 250)) return 'ready';
       await page.waitForTimeout(500);
