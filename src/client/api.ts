@@ -1,4 +1,4 @@
-import type { Ad, AdLocation, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
+import type { Ad, AdLocation, AiAssessmentJobSnapshot, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
 
 // Interface backend (competitors, ads, geo). Same-origin by default — proxied to the
 // interface server in dev (see vite.config.ts), same domain when deployed to Vercel.
@@ -152,4 +152,16 @@ export function fetchJob(runId: string) {
 
 export function stopScrape(runId: string) {
   return scraperApi<ScrapeJobSnapshot>(`/api/jobs/${runId}/stop`, { method: 'POST' });
+}
+
+// On-demand AI assessment of the selected creatives. Returns a job to poll (assessment is slow).
+export function startAdAssessment(ids: string[]) {
+  return scraperApi<AiAssessmentJobSnapshot>('/api/assess', {
+    method: 'POST',
+    body: JSON.stringify({ ids })
+  });
+}
+
+export function fetchAdAssessmentJob(jobId: string) {
+  return scraperApi<AiAssessmentJobSnapshot>(`/api/assess/${jobId}`);
 }

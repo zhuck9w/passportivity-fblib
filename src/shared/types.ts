@@ -188,3 +188,17 @@ export type ScrapeJobSnapshot = {
   collect_carousels?: boolean;
   errors: string[];
 };
+
+// Manual, on-demand AI assessment of a hand-picked set of creatives (selection toolbar).
+// Unlike the scrape-time pass, this ignores the duplicate gate and re-assesses everything asked.
+export type AiAssessmentJobSnapshot = {
+  job_id: string;
+  status: 'running' | 'succeeded' | 'failed';
+  total: number;
+  done: number;
+  assessed: number;
+  skipped: number;
+  failed: number;
+  message?: string;
+  errors: string[];
+};

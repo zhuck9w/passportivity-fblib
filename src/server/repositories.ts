@@ -2,6 +2,7 @@ import type {
   Ad,
   AdAiAssessment,
   AdLocation,
+  AdMediaItem,
   AdScanObservation,
   Competitor,
   CompetitorScanRun,
@@ -321,6 +322,43 @@ export async function updateAdAssessment(id: string, assessment: AdAiAssessment)
     .select('id')
     .single();
   return throwIfError<Pick<Ad, 'id'>>(result);
+}
+
+export type AssessmentAd = {
+  id: string;
+  facebook_library_id: string;
+  title: string | null;
+  body_text: string | null;
+  preview_text: string | null;
+  cta: string | null;
+  media_items: AdMediaItem[];
+  competitor_name: string | null;
+};
+
+// Minimal ad payload needed to run AI assessment (creative text + media + company name).
+// Used by the on-demand bulk-assessment job; preserves the caller's id order is NOT guaranteed
+// (the caller re-orders), it just returns whatever ids exist.
+export async function listAdsForAssessment(ids: string[]): Promise<AssessmentAd[]> {
+  if (!ids.length) return [];
+  const result = await supabase
+    .from('ads')
+    .select('id, facebook_library_id, title, body_text, preview_text, cta, media_items, competitors(name)')
+    .in('id', ids);
+  const rows = throwIfError<Array<Record<string, unknown>>>(result);
+  return rows.map((row) => {
+    const competitors = row.competitors as { name?: string | null } | Array<{ name?: string | null }> | null;
+    const competitorName = Array.isArray(competitors) ? competitors[0]?.name ?? null : competitors?.name ?? null;
+    return {
+      id: String(row.id),
+      facebook_library_id: String(row.facebook_library_id ?? ''),
+      title: (row.title as string | null) ?? null,
+      body_text: (row.body_text as string | null) ?? null,
+      preview_text: (row.preview_text as string | null) ?? null,
+      cta: (row.cta as string | null) ?? null,
+      media_items: (row.media_items as AdMediaItem[] | null) ?? [],
+      competitor_name: competitorName
+    };
+  });
 }
 
 export async function setAdHidden(id: string, hidden: boolean) {

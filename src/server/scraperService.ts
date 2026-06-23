@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
 import { isAiAssessmentEnabled } from './aiAssessment';
+import { aiAssessmentJobManager } from './aiAssessmentJobManager';
 import { env } from './env';
 import { asyncRoute, errorHandler, routeParam } from './httpUtils';
 import { logServer, readLogTail } from './logger';
@@ -17,6 +18,10 @@ const scrapeStartSchema = z.object({
   competitor_id: z.string().uuid().optional(),
   limit: z.number().int().positive().max(500).optional(),
   collect_carousels: z.boolean().optional()
+});
+
+const assessStartSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(500)
 });
 
 app.get('/api/health', (_req, res) => {
@@ -79,6 +84,30 @@ app.get('/api/jobs/:runId', (req, res) => {
 
 app.post('/api/jobs/:runId/stop', (req, res) => {
   const job = scrapeJobManager.stop(routeParam(req.params.runId));
+  if (!job) {
+    res.status(404).json({ error: 'Job not found' });
+    return;
+  }
+  res.json(job);
+});
+
+// On-demand AI assessment of a hand-picked set of ad ids (selection toolbar). Runs as a polled
+// job because assessing many creatives via OpenAI is slow. Re-assesses everything asked for,
+// including duplicates that the scrape-time pass deliberately skips.
+app.post(
+  '/api/assess',
+  asyncRoute(async (req, res) => {
+    const { ids } = assessStartSchema.parse(req.body ?? {});
+    if (!isAiAssessmentEnabled()) {
+      res.status(400).json({ error: 'AI-анализ выключен или не задан OPENAI_KEY' });
+      return;
+    }
+    res.status(202).json(aiAssessmentJobManager.start(ids));
+  })
+);
+
+app.get('/api/assess/:jobId', (req, res) => {
+  const job = aiAssessmentJobManager.get(routeParam(req.params.jobId));
   if (!job) {
     res.status(404).json({ error: 'Job not found' });
     return;

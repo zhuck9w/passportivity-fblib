@@ -22,6 +22,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Trash2,
   X
@@ -40,13 +41,22 @@ import {
 } from 'react';
 import { nonCountryGeoValues, splitGeoValues } from '../shared/countries';
 import { adAiAssessmentKeys } from '../shared/types';
-import type { Ad, AdLocation, AdMediaItem, Competitor, ScrapeJobSnapshot, ScrapeRun } from '../shared/types';
+import type {
+  Ad,
+  AdLocation,
+  AdMediaItem,
+  AiAssessmentJobSnapshot,
+  Competitor,
+  ScrapeJobSnapshot,
+  ScrapeRun
+} from '../shared/types';
 import {
   bulkCreateCompetitors,
   bulkSetAdHidden,
   createCompetitor,
   deleteCompetitor,
   fetchAd,
+  fetchAdAssessmentJob,
   fetchAdLocations,
   fetchAds,
   fetchCompetitors,
@@ -54,6 +64,7 @@ import {
   fetchScrapeRuns,
   imageProxyUrl,
   setAdHidden,
+  startAdAssessment,
   startScrape,
   stopScrape,
   unmarkAdDuplicate,
@@ -712,8 +723,14 @@ function previewSrcDoc(ad: Ad, mediaItems: PreviewMediaItem[]) {
   </article></div>${renderCarouselScript(hasCarousel)}</body></html>`;
 }
 
+// Always link straight to the specific creative (…/ads/library/?id=<archive id>), not the
+// competitor's filtered page-results URL. `source_url` is the latter (full filters), so we only
+// fall back to it for the rare ad whose library id never resolved.
 function directAdUrl(ad: Ad) {
-  return ad.source_url || `https://www.facebook.com/ads/library/?id=${encodeURIComponent(ad.facebook_library_id)}`;
+  if (ad.facebook_library_id && ad.facebook_library_id !== 'unknown') {
+    return `https://www.facebook.com/ads/library/?id=${encodeURIComponent(ad.facebook_library_id)}`;
+  }
+  return ad.source_url || 'https://www.facebook.com/ads/library/';
 }
 
 function parseRuDate(value: string | null) {
@@ -1043,6 +1060,7 @@ export function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkHiding, setBulkHiding] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [assessJob, setAssessJob] = useState<AiAssessmentJobSnapshot | null>(null);
   // Anchor for shift-click range selection; sortedAds mirror lets stable handlers read the
   // current ordered list without re-creating the memoized row callbacks.
   const selectionAnchorRef = useRef<number | null>(null);
@@ -1209,6 +1227,31 @@ export function App() {
 
     return () => window.clearInterval(interval);
   }, [job?.run_id, job?.status]);
+
+  // Poll the on-demand AI assessment job; refresh the table when it finishes so the new ai_* values show.
+  useEffect(() => {
+    if (!assessJob || assessJob.status !== 'running') return undefined;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const nextJob = await fetchAdAssessmentJob(assessJob.job_id);
+        setAssessJob(nextJob);
+        if (nextJob.status !== 'running') {
+          await refresh();
+          if (nextJob.failed > 0) {
+            setError(
+              `AI-анализ: ${nextJob.assessed} готово, ${nextJob.skipped} пропущено, ${nextJob.failed} с ошибкой. ` +
+                'Частая причина ошибок — устаревшие ссылки на медиа (нужен повторный сбор объявления).'
+            );
+          }
+        }
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [assessJob?.job_id, assessJob?.status]);
 
   async function handleStartScrape(competitorId?: string) {
     setError(null);
@@ -1757,6 +1800,18 @@ export function App() {
     }
   }
 
+  async function handleBulkAssess() {
+    const ids = sortedAdsRef.current.filter((ad) => selectedIds.has(ad.id)).map((ad) => ad.id);
+    if (!ids.length || assessJob?.status === 'running') return;
+    setError(null);
+    try {
+      const job = await startAdAssessment(ids);
+      setAssessJob(job);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
+  }
+
   async function handleExportSelected() {
     const adsToExport = sortedAdsRef.current.filter((ad) => selectedIds.has(ad.id));
     if (!adsToExport.length || exportProgress) return;
@@ -1948,6 +2003,18 @@ export function App() {
             >
               {bulkHiding ? <Loader2 size={17} className="spin" /> : <EyeOff size={17} />}
               Скрыть{selectedCount ? ` (${selectedCount})` : ''}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void handleBulkAssess()}
+              disabled={!selectedCount || assessJob?.status === 'running'}
+              title="Прогнать AI-анализ по выбранным креативам (включая те, что помечены дублями)"
+            >
+              {assessJob?.status === 'running' ? <Loader2 size={17} className="spin" /> : <Sparkles size={17} />}
+              {assessJob?.status === 'running'
+                ? `AI-анализ… ${assessJob.done}/${assessJob.total}`
+                : `AI-анализ${selectedCount ? ` (${selectedCount})` : ''}`}
             </button>
             <button
               type="button"
