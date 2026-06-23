@@ -1602,6 +1602,20 @@ select,
   white-space: nowrap;
 }
 
+/* Collected-creatives count next to the competitor name. More specific than `.competitor-row span`
+   so it keeps its accent color instead of the muted text color. */
+.competitor-row strong .competitor-count {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #e8f0fe;
+  color: #1769e0;
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
 .switch-wrap {
   position: relative;
   display: inline-flex;

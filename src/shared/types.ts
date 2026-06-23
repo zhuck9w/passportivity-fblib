@@ -10,6 +10,9 @@ export type Competitor = {
   last_scraped_at: string | null;
   created_at: string;
   updated_at: string;
+  // Total ad rows stored for this competitor. Populated only by the competitors list endpoint
+  // (so the dialog can show "collected so far"); undefined elsewhere.
+  ad_count?: number;
 };
 
 export type ScrapeRun = {

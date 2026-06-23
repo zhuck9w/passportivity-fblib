@@ -3041,7 +3041,12 @@ function CompetitorsDialog({
                 onChange={() => toggleSelect(competitor.id)}
               />
               <div>
-                <strong>{competitor.name}</strong>
+                <strong>
+                  {competitor.name}
+                  <span className="competitor-count" title="Всего собрано креативов">
+                    {competitor.ad_count ?? 0}
+                  </span>
+                </strong>
                 <span>{competitor.facebook_page_id}</span>
                 <small>
                   последний сбор:{' '}

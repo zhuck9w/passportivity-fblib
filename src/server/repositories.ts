@@ -31,11 +31,17 @@ async function findExistingAd(input: ScrapedAdInput) {
 }
 
 export async function listCompetitors() {
+  // `ads(count)` returns each competitor's stored ad total as `ads: [{ count }]` (one aggregate
+  // query, no N+1). We flatten it onto `ad_count` so the UI can show "collected so far".
   const result = await supabase
     .from('competitors')
-    .select('*')
+    .select('*, ads(count)')
     .order('created_at', { ascending: false });
-  return throwIfError<Competitor[]>(result);
+  const rows = throwIfError<Array<Competitor & { ads?: Array<{ count: number }> }>>(result);
+  return rows.map(({ ads, ...competitor }) => ({
+    ...competitor,
+    ad_count: ads?.[0]?.count ?? 0
+  }));
 }
 
 export async function getCompetitor(id: string) {
