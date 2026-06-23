@@ -1570,6 +1570,15 @@ select,
   justify-content: flex-end;
 }
 
+/* Inline save error under the edit inputs (e.g. duplicate Page ID). Overrides the muted,
+   single-line `.competitor-row span` so the message is red and wraps fully. */
+.competitor-row .competitor-edit-error {
+  color: #b42318;
+  font-size: 12px;
+  white-space: normal;
+  overflow: visible;
+}
+
 .competitor-select {
   width: 17px;
   height: 17px;

@@ -2805,6 +2805,7 @@ function CompetitorsDialog({
   const [editName, setEditName] = useState('');
   const [editPageId, setEditPageId] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Drop selections for competitors that no longer exist (e.g. just deleted).
   useEffect(() => {
@@ -2853,18 +2854,32 @@ function CompetitorsDialog({
     setEditingId(competitor.id);
     setEditName(competitor.name);
     setEditPageId(competitor.facebook_page_id);
+    setEditError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditError(null);
   }
 
   async function saveEdit(id: string) {
     const name = editName.trim();
     if (!name || !editPageId || savingEdit) return;
     setSavingEdit(true);
+    setEditError(null);
     try {
       await updateCompetitor(id, { name, facebook_page_id: editPageId });
       setEditingId(null);
       onChanged();
-    } catch (editError) {
-      console.error(editError);
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : String(saveError);
+      // The common case is the unique-constraint hit when the new Page ID already belongs to
+      // another competitor — say so plainly instead of failing silently.
+      setEditError(
+        /duplicate key|already exists|unique/i.test(message)
+          ? 'Этот Facebook Page ID уже используется другим конкурентом'
+          : message
+      );
     } finally {
       setSavingEdit(false);
     }
@@ -3075,18 +3090,25 @@ function CompetitorsDialog({
                       <input
                         className="competitor-edit-input"
                         value={editName}
-                        onChange={(event) => setEditName(event.target.value)}
+                        onChange={(event) => {
+                          setEditName(event.target.value);
+                          if (editError) setEditError(null);
+                        }}
                         placeholder="Название"
                         aria-label="Название конкурента"
                       />
                       <input
                         className="competitor-edit-input"
                         value={editPageId}
-                        onChange={(event) => setEditPageId(event.target.value.replace(/\D/g, ''))}
+                        onChange={(event) => {
+                          setEditPageId(event.target.value.replace(/\D/g, ''));
+                          if (editError) setEditError(null);
+                        }}
                         placeholder="Facebook Page ID"
                         inputMode="numeric"
                         aria-label="Facebook Page ID"
                       />
+                      {editError && <span className="competitor-edit-error">{editError}</span>}
                     </>
                   ) : (
                     <>
@@ -3120,7 +3142,7 @@ function CompetitorsDialog({
                     <button
                       type="button"
                       className="icon-button"
-                      onClick={() => setEditingId(null)}
+                      onClick={cancelEdit}
                       disabled={savingEdit}
                       title="Отменить"
                     >
